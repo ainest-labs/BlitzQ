@@ -30,7 +30,8 @@ and Redis. Part of [AiNest Labs](https://github.com/ainest-labs).
 [Retries](#retries) · [Scheduling](#scheduling) · [Results](#results-and-task-inspection) ·
 [Frameworks](#framework-integrations) · [Configuration](#configuration) ·
 [Reliability](#reliability-modes-and-delivery-guarantees) · [Tests](#running-tests) ·
-[Benchmarks](#benchmarks) · [Limitations](#current-limitations)
+[Benchmarks](#benchmarks) · [Limitations](#current-limitations) ·
+[Roadmap](docs/roadmap.md)
 
 ## Requirements
 
@@ -418,11 +419,14 @@ python -m benchmarks.report --input benchmarks/results/<run-dir>
 - Cancelling a queued or running task is best effort (revocation synced about
   every second). Only scheduled tasks are cancelled with certainty.
 - Without `track_state`, queued and running tasks have no inspectable record.
-- `get_result` polls; there is no push notification of completion.
 - Task chains/groups/chords and a web dashboard are not implemented. Priority
   and rate limiting within a queue are (see above).
 - Delayed-task precision is bounded by the promoter poll interval (0.5 s default)
   for tasks scheduled earlier than anything already pending.
+
+See [docs/roadmap.md](docs/roadmap.md) for why Redis Cluster support isn't
+there yet, and what's already been fixed (`get_result()` used to poll; it's
+now notification-driven).
 
 ## License
 

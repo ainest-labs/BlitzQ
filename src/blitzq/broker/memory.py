@@ -108,17 +108,30 @@ class MemoryBroker(Broker):
         for c in completions:
             if c.record is not None and c.record_task_id is not None:
                 self._set(c.record_task_id, c.record, c.record_ttl)
+                notify = True
             if c.reschedule is not None:
                 r = c.reschedule
                 self._schedule(r.queue, r.task_id, r.data, r.eta)
             if c.dead_letter is not None:
                 d = c.dead_letter
                 self._dlq[d.task_id] = (time.time(), d.data)
+                notify = True
             if c.requeue and c.delivery is not None:
                 self._q(c.delivery.queue).append(c.delivery.data)
                 notify = True
         if notify:
             await self._notify()
+
+    async def wait_for_record(self, task_id: str, timeout: float) -> None:
+        # Single condition variable for the whole broker (queues, records and
+        # dead letters alike); callers always re-check the record themselves,
+        # so waking up on unrelated notifications just costs a redundant read.
+        cond = self._condition()
+        async with cond:
+            try:
+                await asyncio.wait_for(cond.wait(), timeout)
+            except TimeoutError:
+                pass
 
     async def promote_due(self, now: float, limit: int) -> tuple[int, float | None]:
         n = 0

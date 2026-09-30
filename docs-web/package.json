@@ -2,8 +2,11 @@
   "name": "docs-web",
   "version": "0.0.37",
   "private": true,
+  "engines": {
+    "node": ">=20.9.0"
+  },
   "scripts": {
-    "gen-api": "pip install -q -r ../scripts/requirements.txt && (python3 ../scripts/gen_api_docs.py || python ../scripts/gen_api_docs.py)",
+    "gen-api": "node scripts/gen-api-safe.mjs",
     "prebuild": "npm run gen-api",
     "build": "next build",
     "dev": "next dev",

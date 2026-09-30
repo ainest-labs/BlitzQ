@@ -73,7 +73,7 @@ correlation_id, headers, timeout`. A no-argument task message is about 60 bytes.
 New fields can only be appended with defaults, so messages from older producers
 keep decoding.
 
-Only plain data is accepted (see [serialization](../README.md#serialization)).
+Only plain data is accepted (see [serialization](https://github.com/ainest-labs/BlitzQ#serialization)).
 Nothing received from Redis is ever unpickled. Malformed messages are dead-lettered
 with reason `malformed message`, and oversized messages are rejected on both
 enqueue and receipt.

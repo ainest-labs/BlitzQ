@@ -78,6 +78,25 @@ result = await queue.get_result(task.id, timeout=10)`}</code>
         </div>
         <BenchmarkChart />
       </section>
+
+      <section className="px-4 pb-24 max-w-3xl mx-auto w-full">
+        <div className="rounded-2xl border border-fd-border bg-fd-card p-6 flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <h2 className="text-lg font-semibold mb-1">Known gaps, stated plainly</h2>
+            <p className="text-fd-muted-foreground text-sm max-w-md">
+              What&apos;s out of scope for 1.0.0, why, and what&apos;s already been fixed —
+              including why <code className="text-fd-foreground">get_result()</code> no longer
+              polls.
+            </p>
+          </div>
+          <Link
+            href="/docs/roadmap"
+            className="rounded-full border border-fd-border px-4 py-2 text-sm font-semibold shrink-0"
+          >
+            Read the roadmap
+          </Link>
+        </div>
+      </section>
     </main>
   );
 }

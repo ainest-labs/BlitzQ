@@ -424,7 +424,12 @@ class Queue:
 
     async def _get_result(self, broker: Broker, task_id: str, timeout: float | None) -> Any:
         deadline = None if timeout is None else time.monotonic() + timeout
-        delay = 0.002
+        # Safety-net ceiling on each wait: brokers that push a notification
+        # (Redis: pub/sub) return almost immediately once the task finishes;
+        # this bounds how long a missed notification (e.g. a dropped pub/sub
+        # message during a reconnect) can delay noticing a record that's
+        # already there.
+        max_wait = 5.0
         last: TaskInfo | None = None
         while True:
             data = await broker.get_record(task_id)
@@ -440,17 +445,20 @@ class Queue:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise ResultTimeout(task_id, timeout, last.state if last else None)
-                await asyncio.sleep(min(delay, remaining))
+                wait = min(max_wait, remaining)
             else:
-                await asyncio.sleep(delay)
-            delay = min(delay * 1.5, 0.1)
+                wait = max_wait
+            await broker.wait_for_record(task_id, wait)
 
     async def get_result(self, task_id: str, timeout: float | None = None) -> Any:
-        """Wait for a task's final state and return its result (polls with backoff).
+        """Wait for a task's final state and return its result.
 
-        Requires result storage for the task. Raises ``TaskFailed`` for
-        failed, dead-lettered or cancelled tasks and ``ResultTimeout`` after
-        ``timeout`` seconds (``None`` waits indefinitely).
+        Waits on the broker's push notification when it has one (Redis:
+        pub/sub on the task's record channel), falling back to a coarse
+        poll otherwise. Requires result storage for the task. Raises
+        ``TaskFailed`` for failed, dead-lettered or cancelled tasks and
+        ``ResultTimeout`` after ``timeout`` seconds (``None`` waits
+        indefinitely).
         """
         return await self._get_result(self.broker, task_id, timeout)
 

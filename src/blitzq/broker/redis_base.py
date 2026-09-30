@@ -179,9 +179,15 @@ class RedisBrokerBase(Broker):
         pipe.hset(self.k_sched_d, task_id, _pack_sched(queue, data))
         pipe.zadd(self.k_sched, {task_id: eta})
 
+    def _rkey(self, task_id: str) -> str:
+        """Pub/sub channel notified whenever task_id's record or dead-letter
+        entry changes, so get_result() can wake up instead of polling."""
+        return f"{self.prefix}n:{task_id}"
+
     async def _add_completion(self, pipe: Pipeline, c: Completion) -> None:
         if c.record is not None and c.record_task_id is not None:
             pipe.set(f"{self.prefix}t:{c.record_task_id}", c.record, ex=c.record_ttl)
+            pipe.publish(self._rkey(c.record_task_id), b"1")
         if c.reschedule is not None:
             r = c.reschedule
             self._add_schedule(pipe, r.queue, r.task_id, r.data, r.eta)
@@ -193,6 +199,7 @@ class RedisBrokerBase(Broker):
                 args=[d.task_id, d.data, time.time(), d.max_entries or self.dead_letter_max],
                 client=pipe,
             )
+            pipe.publish(self._rkey(d.task_id), b"1")
         if c.requeue and c.delivery is not None:
             self._push_front(pipe, self.qkey(c.delivery.queue), c.delivery.data)
 
@@ -268,6 +275,35 @@ class RedisBrokerBase(Broker):
 
     async def set_record(self, task_id: str, data: bytes, ttl: int | None) -> None:
         await self._r().set(f"{self.prefix}t:{task_id}", data, ex=ttl)
+
+    async def wait_for_record(self, task_id: str, timeout: float) -> None:
+        """Block up to ``timeout`` seconds on the record's pub/sub channel.
+
+        Opens a dedicated pub/sub connection per call rather than
+        multiplexing one connection across every in-flight wait, trading
+        some connection overhead for simplicity; a high-volume ``get_result``
+        workload will hold up to one pooled connection per waiting task for
+        (at most) the wait slice below, on top of whatever the workers and
+        producers already use.
+        """
+        r = self._r()
+        channel = self._rkey(task_id)
+        pubsub = r.pubsub()
+        try:
+            await pubsub.subscribe(channel)
+            # The subscribe acknowledgement is itself a message; consume it
+            # without eating into the real wait below.
+            await pubsub.get_message(timeout=0.01)
+            await pubsub.get_message(ignore_subscribe_messages=True, timeout=timeout)
+        except Exception:
+            # Connection hiccup: fall back to the caller's own poll loop
+            # rather than raising out of what's meant to be best-effort.
+            await asyncio.sleep(min(timeout, 1.0))
+        finally:
+            try:
+                await pubsub.unsubscribe(channel)
+            finally:
+                await pubsub.aclose()
 
     # -- dead letters --------------------------------------------------------------
     async def dead_letters(self, limit: int = 100, offset: int = 0) -> list[bytes]:

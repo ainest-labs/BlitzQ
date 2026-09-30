@@ -157,11 +157,14 @@ Eagerly connect the async broker (optional; connections are lazy).
 
 ### `get_result(task_id: str, timeout: float | None = None) -> Any`
 
-Wait for a task's final state and return its result (polls with backoff).
+Wait for a task's final state and return its result.
 
-Requires result storage for the task. Raises ``TaskFailed`` for
-failed, dead-lettered or cancelled tasks and ``ResultTimeout`` after
-``timeout`` seconds (``None`` waits indefinitely).
+Waits on the broker's push notification when it has one (Redis:
+pub/sub on the task's record channel), falling back to a coarse
+poll otherwise. Requires result storage for the task. Raises
+``TaskFailed`` for failed, dead-lettered or cancelled tasks and
+``ResultTimeout`` after ``timeout`` seconds (``None`` waits
+indefinitely).
 
 ### `get_result_sync(task_id: str, timeout: float | None = None) -> Any`
 

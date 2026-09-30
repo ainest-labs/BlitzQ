@@ -135,6 +135,19 @@ Currently active revocations.
 
 ### `unregister_worker(worker_id: str) -> None`
 
+### `wait_for_record(task_id: str, timeout: float) -> None`
+
+Block up to ``timeout`` seconds for a push notification that
+``task_id``'s record or dead-letter entry may have changed.
+
+Best effort, not exact: may return early with nothing to see (the
+caller must re-check the record), and may time out even though a
+change happened concurrently (for example a dropped pub/sub message
+during a reconnect). ``get_result()`` relies on this only to avoid
+polling tightly; it always re-reads the record itself afterwards, so
+a broker that never notifies (the default here) just falls back to
+coarser polling instead of being wrong.
+
 ### `workers() -> dict[str, bytes]`
 
 
@@ -234,11 +247,14 @@ Eagerly connect the async broker (optional; connections are lazy).
 
 ### `get_result(task_id: str, timeout: float | None = None) -> Any`
 
-Wait for a task's final state and return its result (polls with backoff).
+Wait for a task's final state and return its result.
 
-Requires result storage for the task. Raises ``TaskFailed`` for
-failed, dead-lettered or cancelled tasks and ``ResultTimeout`` after
-``timeout`` seconds (``None`` waits indefinitely).
+Waits on the broker's push notification when it has one (Redis:
+pub/sub on the task's record channel), falling back to a coarse
+poll otherwise. Requires result storage for the task. Raises
+``TaskFailed`` for failed, dead-lettered or cancelled tasks and
+``ResultTimeout`` after ``timeout`` seconds (``None`` waits
+indefinitely).
 
 ### `get_result_sync(task_id: str, timeout: float | None = None) -> Any`
 

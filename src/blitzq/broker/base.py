@@ -20,6 +20,7 @@ coroutines.
 
 from __future__ import annotations
 
+import asyncio
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -159,6 +160,20 @@ class Broker(ABC):
     @abstractmethod
     async def complete(self, completions: Sequence[Completion]) -> None:
         """Apply a batch of completions (acks, records, retries, dead letters)."""
+
+    async def wait_for_record(self, task_id: str, timeout: float) -> None:
+        """Block up to ``timeout`` seconds for a push notification that
+        ``task_id``'s record or dead-letter entry may have changed.
+
+        Best effort, not exact: may return early with nothing to see (the
+        caller must re-check the record), and may time out even though a
+        change happened concurrently (for example a dropped pub/sub message
+        during a reconnect). ``get_result()`` relies on this only to avoid
+        polling tightly; it always re-reads the record itself afterwards, so
+        a broker that never notifies (the default here) just falls back to
+        coarser polling instead of being wrong.
+        """
+        await asyncio.sleep(min(timeout, 0.05))
 
     async def heartbeat(
         self, queue: str, deliveries: Sequence[Delivery], consumer: str
