@@ -4,7 +4,7 @@ All notable changes to this project are documented here. The project follows
 [Semantic Versioning](https://semver.org/). While the version is 0.x, minor
 releases may contain breaking changes.
 
-## [0.1.0] - unreleased
+## [1.0.0] - 2026-09-30
 
 First release. Not yet published to PyPI.
 
