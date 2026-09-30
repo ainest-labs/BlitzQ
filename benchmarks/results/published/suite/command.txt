@@ -1,0 +1,1 @@
+python -m benchmarks.runner --config benchmarks/configs/suite.yaml

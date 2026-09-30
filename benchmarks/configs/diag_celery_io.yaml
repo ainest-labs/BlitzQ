@@ -1,0 +1,12 @@
+# Diagnostic: Celery pool/ack-mode behaviour on a 50 ms I/O task.
+name: diag-celery-io
+repetitions: 1
+systems: [celery]
+defaults: {visibility_timeout: 10}
+profiles:
+  threads-late: {celery: {processes: 1, concurrency: 8, pool: threads, acks_late: true}}
+  threads-early: {celery: {processes: 1, concurrency: 8, pool: threads, acks_late: false}}
+  prefork-late: {celery: {processes: 1, concurrency: 8, pool: prefork, acks_late: true}}
+  gevent-late: {celery: {processes: 1, concurrency: 8, pool: gevent, acks_late: true}}
+workloads:
+  - {name: io50, kind: io, io_ms: 50, tasks: 800, warmup: 50, timeout: 120}

@@ -1,0 +1,1 @@
+python -m benchmarks.runner --config benchmarks/configs/suite.yaml --systems blitzq --repetitions 3 --only noop,noop-drain --output benchmarks/results/postfix

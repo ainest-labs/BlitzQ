@@ -1,0 +1,36 @@
+# Local development / integration-test / benchmark services.
+#   docker compose up -d redis            -> broker for tests and examples (port 6379)
+#   docker compose up -d redis redis-stats -> plus accounting Redis for benchmarks (port 6380)
+services:
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "no", "--save", "", "--enable-debug-command", "yes"]
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+
+  # Separate Redis used only by the benchmark harness to collect per-task
+  # timing records, so accounting traffic never contends with the broker.
+  redis-stats:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "no", "--save", ""]
+    ports:
+      - "6380:6379"
+
+  bench:
+    build:
+      context: .
+      dockerfile: benchmarks/Dockerfile
+    depends_on:
+      - redis
+      - redis-stats
+    environment:
+      BLITZQ_BENCH_BROKER_URL: redis://redis:6379/0
+      BLITZQ_BENCH_STATS_URL: redis://redis-stats:6379/0
+    volumes:
+      - .:/app
+    profiles: ["bench"]

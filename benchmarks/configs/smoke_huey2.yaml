@@ -1,0 +1,10 @@
+name: smoke-huey2
+repetitions: 1
+systems: [huey]
+defaults: {visibility_timeout: 10}
+profiles:
+  greenlet: {huey: {processes: 1, concurrency: 100, worker_type: greenlet}}
+  process8: {huey: {processes: 1, concurrency: 8, worker_type: process}}
+workloads:
+  - {name: io20, kind: io, io_ms: 20, tasks: 1000, profiles: [greenlet], warmup: 50, timeout: 60}
+  - {name: cpu, kind: cpu, cpu_iters: 200000, tasks: 200, profiles: [process8], warmup: 20, timeout: 60}

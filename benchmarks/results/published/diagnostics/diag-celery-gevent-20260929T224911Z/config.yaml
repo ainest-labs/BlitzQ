@@ -1,0 +1,12 @@
+# Diagnostic/tuning: Celery gevent pool on a 20 ms I/O task.
+name: diag-celery-gevent
+repetitions: 1
+systems: [celery]
+defaults: {visibility_timeout: 10}
+profiles:
+  gevent-100-p4: {celery: {processes: 1, concurrency: 100, pool: gevent, acks_late: true, prefetch: 4}}
+  gevent-500-p1: {celery: {processes: 1, concurrency: 500, pool: gevent, acks_late: true, prefetch: 1}}
+  gevent-500-early: {celery: {processes: 1, concurrency: 500, pool: gevent, acks_late: false, prefetch: 4}}
+  prefork-16: {celery: {processes: 1, concurrency: 16, pool: prefork, acks_late: true, prefetch: 4}}
+workloads:
+  - {name: io20, kind: io, io_ms: 20, tasks: 3000, warmup: 100, timeout: 120}

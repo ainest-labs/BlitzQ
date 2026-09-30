@@ -1,0 +1,14 @@
+# Quick harness check: small task counts, one repetition.
+name: smoke
+repetitions: 1
+systems: [blitzq, celery]
+defaults:
+  visibility_timeout: 10
+profiles:
+  A-alo:
+    blitzq: {processes: 1, concurrency: 8, mode: reliable, style: sync, producer: sync}
+    celery: {processes: 1, concurrency: 8, pool: threads, acks_late: true, prefetch: 4, producer: sync}
+workloads:
+  - {name: noop, kind: noop, tasks: 2000, warmup: 100, timeout: 60}
+  - {name: retry, kind: retry, tasks: 500, warmup: 100, timeout: 60}
+  - {name: crash, kind: crash, tasks: 500, io_ms: 50, warmup: 100, timeout: 90}

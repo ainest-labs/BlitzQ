@@ -1,0 +1,89 @@
+# Full BlitzQ vs Celery comparison suite (about 2.5 hours on a 12-CPU machine).
+#
+#   docker compose up -d redis redis-stats
+#   docker compose --profile bench run --rm bench \
+#       python -m benchmarks.runner --config benchmarks/configs/suite.yaml
+#   python -m benchmarks.report --input benchmarks/results/suite-<stamp>
+#
+# Profile naming: <profile>-<guarantee>
+#   A  = equivalent configuration: the same plain synchronous task functions, the
+#        same number of concurrent execution slots (16), ONE worker consumer
+#        process, one producer process making one synchronous enqueue call per
+#        task, and each system's *default* execution model for sync functions
+#        (Celery: prefork pool with 16 children; BlitzQ: 16-thread executor).
+#        Celery's `threads` pool was evaluated for this role and rejected: on this
+#        stack it stalled on I/O tasks (configs/diag_celery_io.yaml).
+#   B  = independently tuned: FOUR consumer processes and FOUR producer processes
+#        for both systems; each uses its best configuration from the tuning sweep
+#        (configs/tuning.yaml, configs/tuning2.yaml): BlitzQ async tasks with
+#        4x200 (4x500 for I/O) slots and pipelined batch enqueue; Celery 4 worker
+#        instances with prefork-8 (prefork-16 for I/O, where gevent measured slower).
+#   alo = at-least-once: BlitzQ reliable mode vs Celery task_acks_late +
+#         task_reject_on_worker_lost. Both acknowledge after execution.
+#   amo = early acknowledgement: BlitzQ fast mode vs Celery defaults. Neither
+#         survives a worker crash during execution. (Celery's early-ack mode keeps
+#         prefetched-but-unstarted messages recoverable; BlitzQ fast mode does not,
+#         so BlitzQ fast is slightly *weaker* than Celery defaults.)
+name: suite
+repetitions: 5
+systems: [blitzq, celery]
+defaults:
+  visibility_timeout: 10
+profiles:
+  A-alo:
+    blitzq: {processes: 1, concurrency: 16, mode: reliable, style: sync, producer: sync}
+    celery: {processes: 1, concurrency: 16, pool: prefork, acks_late: true, prefetch: 4, producer: sync}
+  A-amo:
+    blitzq: {processes: 1, concurrency: 16, mode: fast, style: sync, producer: sync}
+    celery: {processes: 1, concurrency: 16, pool: prefork, acks_late: false, prefetch: 4, producer: sync}
+  B-alo:
+    blitzq: {processes: 4, concurrency: 200, mode: reliable, style: async, producer: batch, producers: 4}
+    celery: {processes: 4, concurrency: 8, pool: prefork, acks_late: true, prefetch: 4, producer: sync, producers: 4}
+
+workloads:
+  - {name: noop, kind: noop, tasks: 20000, profiles: [A-alo, A-amo, B-alo]}
+  - {name: noop-drain, kind: noop, tasks: 20000, preload: true, profiles: [A-alo, A-amo, B-alo]}
+  - {name: small-payload, kind: payload, payload_bytes: 1024, tasks: 20000, profiles: [A-alo, B-alo]}
+  - {name: large-payload, kind: payload, payload_bytes: 102400, tasks: 3000, profiles: [A-alo, B-alo]}
+  - name: async-io
+    kind: io
+    io_ms: 20
+    tasks: 10000
+    profiles: [A-alo, B-alo]
+    overrides:
+      B-alo:
+        blitzq: {concurrency: 500}
+        celery: {concurrency: 16}
+  - name: cpu-bound
+    kind: cpu
+    cpu_iters: 200000
+    tasks: 2000
+    profiles: [A-alo, B-alo]
+    overrides:
+      # 8 parallel CPU executors each; BlitzQ uses its process executor.
+      B-alo:
+        blitzq: {processes: 1, concurrency: 16, style: sync, cpu_executor: process, process_pool: 8, producers: 1}
+        celery: {processes: 1, concurrency: 8, producers: 1}
+  - {name: burst-publish, kind: burst, tasks: 30000, profiles: [A-alo, A-amo, B-alo]}
+  - name: multi-queue-uneven
+    kind: multiqueue
+    tasks: 20000
+    queues: {bulk: 0.80, normal: 0.15, urgent: 0.05}
+    profiles: [A-alo, B-alo]
+  - {name: retry-heavy, kind: retry, tasks: 5000, fail_every: 2, retry_delay: 0.1, profiles: [A-alo, B-alo]}
+  - {name: scheduled, kind: scheduled, tasks: 5000, delay_s: 2.0, profiles: [A-alo, B-alo]}
+  - name: worker-crash
+    kind: crash
+    io_ms: 50
+    tasks: 2000
+    disrupt_at: 0.3
+    timeout: 300
+    profiles: [A-alo, A-amo]
+  - name: redis-interruption
+    kind: interrupt
+    io_ms: 20
+    tasks: 5000
+    disrupt_at: 0.3
+    timeout: 300
+    profiles: [A-alo, A-amo]
+  - {name: result-storage, kind: results, tasks: 10000, results: true, profiles: [A-alo, B-alo]}

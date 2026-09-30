@@ -1,0 +1,24 @@
+{
+  "timestamp": "2026-09-30T05:02:03.794147+00:00",
+  "python": "3.12.14 (main, Sep 19 2026, 01:04:57) [GCC 14.2.0]",
+  "platform": "Linux-6.18.33.2-microsoft-standard-WSL2-x86_64-with-glibc2.41",
+  "machine": "x86_64",
+  "cpu_count_logical": 12,
+  "cpu_count_physical": 6,
+  "memory_gb": 25.2,
+  "cpu_affinity": 12,
+  "redis_version": "7.4.11",
+  "redis_mode": "standalone",
+  "packages": {
+    "blitzq": "0.1.0 (source)",
+    "celery": "5.6.3",
+    "kombu": "5.6.2",
+    "huey": "3.4.0",
+    "redis": "6.4.0",
+    "msgspec": "0.22.0",
+    "gevent": "26.9.0",
+    "billiard": "4.3.0"
+  },
+  "broker_url": "redis://redis:6379/0",
+  "stats_url": "redis://redis-stats:6379/0"
+}

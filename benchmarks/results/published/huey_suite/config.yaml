@@ -1,0 +1,69 @@
+# BlitzQ vs Huey comparison. Huey has no at-least-once mode (it pops a
+# message before executing it), so it is only compared against BlitzQ's
+# early-ack fast mode (A-amo / B-amo), never against reliable mode.
+#
+#   docker compose up -d redis redis-stats
+#   docker compose --profile bench run --rm bench \
+#       python -m benchmarks.runner --config benchmarks/configs/huey_suite.yaml
+#   python -m benchmarks.report --input benchmarks/results/huey_suite-<stamp>
+#
+# Profile A-amo: equal settings, 16 execution slots, one consumer process, one
+# producer making one sync call per task. Huey's default worker type for sync
+# functions is "thread" (16 threads), matching BlitzQ's thread executor.
+# Profile B-amo: each system tuned, 4 producer processes. BlitzQ uses 4 async
+# worker processes at 200 (500 for I/O) slots with pipelined enqueue_many.
+# Huey has no batch publish API, so its producer stays one call per task; it
+# uses 4 consumer processes at its best worker type per workload (thread for
+# CPU-bound via process pool, greenlet for I/O - monkey-patched, see
+# benchmarks/apps/huey_app.py).
+name: huey_suite
+repetitions: 5
+systems: [blitzq, huey]
+defaults:
+  visibility_timeout: 10
+profiles:
+  A-amo:
+    blitzq: {processes: 1, concurrency: 16, mode: fast, style: sync, producer: sync}
+    huey: {processes: 1, concurrency: 16, worker_type: thread, producer: sync}
+  B-amo:
+    blitzq: {processes: 4, concurrency: 200, mode: fast, style: async, producer: batch, producers: 4}
+    huey: {processes: 4, concurrency: 16, worker_type: thread, producers: 4}
+
+workloads:
+  - {name: noop, kind: noop, tasks: 20000, profiles: [A-amo, B-amo]}
+  - {name: noop-drain, kind: noop, tasks: 20000, preload: true, profiles: [A-amo, B-amo]}
+  - {name: small-payload, kind: payload, payload_bytes: 1024, tasks: 20000, profiles: [A-amo, B-amo]}
+  - name: async-io
+    kind: io
+    io_ms: 20
+    tasks: 10000
+    profiles: [A-amo, B-amo]
+    overrides:
+      B-amo:
+        blitzq: {concurrency: 500}
+        huey: {worker_type: greenlet, concurrency: 100}
+  - name: cpu-bound
+    kind: cpu
+    cpu_iters: 200000
+    tasks: 2000
+    profiles: [A-amo, B-amo]
+    overrides:
+      B-amo:
+        blitzq: {processes: 1, concurrency: 16, style: sync, cpu_executor: process, process_pool: 8, producers: 1}
+        huey: {processes: 1, concurrency: 8, worker_type: process, producers: 1}
+  - {name: burst-publish, kind: burst, tasks: 30000, profiles: [A-amo, B-amo]}
+  - name: multi-queue-uneven
+    kind: multiqueue
+    tasks: 20000
+    queues: {bulk: 0.80, normal: 0.15, urgent: 0.05}
+    profiles: [A-amo, B-amo]
+  - {name: retry-heavy, kind: retry, tasks: 5000, fail_every: 2, retry_delay: 0.1, profiles: [A-amo, B-amo]}
+  - {name: scheduled, kind: scheduled, tasks: 5000, delay_s: 2.0, profiles: [A-amo, B-amo]}
+  - name: worker-crash
+    kind: crash
+    io_ms: 50
+    tasks: 2000
+    disrupt_at: 0.3
+    timeout: 300
+    profiles: [A-amo]
+  - {name: result-storage, kind: results, tasks: 10000, results: true, profiles: [A-amo, B-amo]}

@@ -1,0 +1,14 @@
+# Second tuning pass: equal consumer-process count (4) for both systems.
+name: tuning2
+repetitions: 2
+systems: [blitzq, celery]
+defaults: {visibility_timeout: 10}
+profiles:
+  bq-4x200:  {blitzq: {processes: 4, concurrency: 200, mode: reliable, style: async, producer: batch}}
+  bq-4x500:  {blitzq: {processes: 4, concurrency: 500, mode: reliable, style: async, producer: batch}}
+  cel-4xpf8:  {celery: {processes: 4, concurrency: 8, pool: prefork, acks_late: true, prefetch: 4}}
+  cel-4xpf16: {celery: {processes: 4, concurrency: 16, pool: prefork, acks_late: true, prefetch: 4}}
+  cel-4xpf32: {celery: {processes: 4, concurrency: 32, pool: prefork, acks_late: true, prefetch: 4}}
+workloads:
+  - {name: noop-drain, kind: noop, tasks: 10000, preload: true, warmup: 200, timeout: 180}
+  - {name: io20-drain, kind: io, io_ms: 20, tasks: 5000, preload: true, warmup: 200, timeout: 180}

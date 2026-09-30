@@ -1,0 +1,9 @@
+# Diagnostic: is the Celery gevent ceiling independent of the task body?
+name: diag-celery-gevent-noop
+repetitions: 1
+systems: [celery]
+defaults: {visibility_timeout: 10}
+profiles:
+  gevent-100: {celery: {processes: 1, concurrency: 100, pool: gevent, acks_late: true, prefetch: 4}}
+workloads:
+  - {name: noop, kind: noop, tasks: 3000, warmup: 100, timeout: 120}

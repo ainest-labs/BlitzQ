@@ -1,0 +1,20 @@
+# Profile B tuning sweep: find each system's best configuration per workload
+# class before the comparison. Results justify the B-alo settings in suite.yaml.
+name: tuning
+repetitions: 2
+systems: [blitzq, celery]
+defaults: {visibility_timeout: 10}
+profiles:
+  bq-1x100:   {blitzq: {processes: 1, concurrency: 100, mode: reliable, style: async, producer: batch}}
+  bq-2x200:   {blitzq: {processes: 2, concurrency: 200, mode: reliable, style: async, producer: batch}}
+  bq-4x200:   {blitzq: {processes: 4, concurrency: 200, mode: reliable, style: async, producer: batch}}
+  bq-1x500:   {blitzq: {processes: 1, concurrency: 500, mode: reliable, style: async, producer: batch}}
+  cel-pf8:    {celery: {processes: 1, concurrency: 8, pool: prefork, acks_late: true, prefetch: 4}}
+  cel-pf16:   {celery: {processes: 1, concurrency: 16, pool: prefork, acks_late: true, prefetch: 4}}
+  cel-pf16-p16: {celery: {processes: 1, concurrency: 16, pool: prefork, acks_late: true, prefetch: 16}}
+  cel-pf32:   {celery: {processes: 1, concurrency: 32, pool: prefork, acks_late: true, prefetch: 4}}
+  cel-pf64:   {celery: {processes: 1, concurrency: 64, pool: prefork, acks_late: true, prefetch: 4}}
+  cel-2xpf16: {celery: {processes: 2, concurrency: 16, pool: prefork, acks_late: true, prefetch: 4}}
+workloads:
+  - {name: noop-drain, kind: noop, tasks: 10000, preload: true, warmup: 200, timeout: 180}
+  - {name: io20-drain, kind: io, io_ms: 20, tasks: 5000, preload: true, warmup: 200, timeout: 180}

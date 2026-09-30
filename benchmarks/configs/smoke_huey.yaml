@@ -1,0 +1,17 @@
+# Quick harness check for the Huey adapter.
+name: smoke-huey
+repetitions: 1
+systems: [blitzq, huey]
+defaults:
+  visibility_timeout: 10
+profiles:
+  A-amo:
+    blitzq: {processes: 1, concurrency: 16, mode: fast, style: sync, producer: sync}
+    huey: {processes: 1, concurrency: 16, worker_type: thread, producer: sync}
+workloads:
+  - {name: noop, kind: noop, tasks: 1000, warmup: 100, timeout: 60}
+  - {name: retry, kind: retry, tasks: 300, warmup: 50, timeout: 60}
+  - {name: multiqueue, kind: multiqueue, tasks: 600, queues: {bulk: 0.8, normal: 0.15, urgent: 0.05}, warmup: 50, timeout: 60}
+  - {name: crash, kind: crash, tasks: 300, io_ms: 50, warmup: 50, timeout: 120}
+  - {name: scheduled, kind: scheduled, tasks: 200, delay_s: 1.0, warmup: 50, timeout: 60}
+  - {name: results, kind: results, tasks: 300, results: true, warmup: 50, timeout: 60}

@@ -1,0 +1,42 @@
+# Changelog
+
+All notable changes to this project are documented here. The project follows
+[Semantic Versioning](https://semver.org/). While the version is 0.x, minor
+releases may contain breaking changes.
+
+## [0.1.0] - unreleased
+
+First release. Not yet published to PyPI.
+
+### Added
+
+- `Queue` application object: task registry, routing rules, per-task options,
+  async and sync client APIs (`enqueue`/`enqueue_sync`, `enqueue_many`,
+  `get_result`, `inspect`, `status`, `cancel`, `retry`, `dead_letters`,
+  `queue_stats`, `purge`, `send` by name).
+- Redis brokers: **reliable mode** (Streams consumer groups, at-least-once,
+  lease renewal, crash recovery, poison-message protection) and **fast mode**
+  (lists, at-most-once). `MemoryBroker` for tests (ephemeral).
+- Broker abstraction (`blitzq.broker.base.Broker`); all Redis commands are
+  isolated in `blitzq.broker`.
+- Worker: bounded global and per-queue concurrency, backpressure, async tasks,
+  thread executor for sync tasks, process executor for CPU-bound tasks, timeouts,
+  graceful shutdown with requeue, group-committed acknowledgements, revocation,
+  structured logging, metrics, optional Prometheus exporter. Warns once per
+  task name when a thread-executor task looks CPU-bound (high thread CPU/wall
+  ratio for a non-trivial duration), suggesting `executor="process"`;
+  disable with `warn_cpu_bound=False` / `--no-warn-cpu-bound`.
+- Retries: `RetryPolicy` (exponential backoff, max delay, jitter,
+  retryable/non-retryable exceptions), explicit `Retry`, scheduled (not sleeping)
+  retries, dead-letter store with replay.
+- Scheduling: delays and ETAs via an atomically promoted sorted set; periodic
+  tasks (`Every`, timezone-aware `Cron`) with deterministic occurrence ids,
+  compare-and-set dispatch for multiple schedulers, and `skip`/`run_once`/`run_all`
+  missed-run policies.
+- Task state records with optional state tracking and result TTL.
+- CLI: `worker`, `scheduler`, `queue stats|purge`, `task inspect|retry|cancel`,
+  `dead-letter list|purge`, `benchmark run|compare`.
+- Integrations: ASGI lifespan (FastAPI/Starlette/Litestar), Django
+  (`enqueue_on_commit`, worker setup), Flask (`init_app`, app context in workers).
+- Benchmark suite comparing BlitzQ with Celery and Huey (12 workload types,
+  equivalent and tuned profiles, raw CSV/JSON output, charts, Markdown report).
