@@ -3,6 +3,7 @@
 import asyncio
 import json
 import os
+import platform
 import subprocess
 import sys
 import time
@@ -143,6 +144,63 @@ def test_worker_and_scheduler_subprocesses(ns):
         _, err = worker.communicate(timeout=10)
     first = err.decode().splitlines()[0]
     assert json.loads(first)["msg"] == "worker started"
+
+
+def test_worker_pool_subprocess(ns):
+    """--workers N: multiple processes actually register and process tasks.
+
+    Graceful shutdown of the pool (SIGTERM/SIGINT to the supervisor -> an
+    Event tells every child to stop, not signal-forwarding, since
+    os.kill()/Popen.terminate() hard-kill on Windows rather than delivering
+    a catchable signal) isn't asserted here for the same reason
+    test_worker_and_scheduler_subprocesses above doesn't: .terminate() is
+    itself a hard kill on Windows, so it can't be used to observe graceful
+    shutdown in a cross-platform test. That path is covered by manual
+    verification with a real SIGTERM on Linux instead.
+    """
+    env = {
+        **os.environ,
+        "BQ_URL": REDIS_URL,
+        "BQ_NS": ns,
+        "PYTHONPATH": os.pathsep.join([str(HERE), os.environ.get("PYTHONPATH", "")]),
+    }
+    pool = subprocess.Popen(
+        [sys.executable, "-m", "blitzq", "worker", "cli_app:app", "-Q", "default",
+         "-c", "5", "--workers", "3"],
+        cwd=HERE,
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )  # fmt: skip
+    try:
+        app = Queue(redis_url=REDIS_URL, namespace=ns, mode="fast")
+
+        @app.task(name="cli.echo")
+        async def echo(x):
+            return x
+
+        echo.enqueue_many_sync((i,) for i in range(9))
+        deadline = time.monotonic() + 15
+        workers = []
+        while time.monotonic() < deadline:
+            res = invoke("queue", "stats", *conn(ns), "--json")
+            workers = json.loads(res.stdout)["workers"]
+            if len(workers) == 3 and sum(w["processed"] for w in workers) == 9:
+                break
+            time.sleep(0.5)
+        assert len(workers) == 3, f"expected 3 registered workers, got {workers}"
+        assert sum(w["processed"] for w in workers) == 9, workers
+        app.close_sync()
+    finally:
+        # .terminate() only reaches the supervisor's children via a catchable
+        # signal on POSIX; on Windows it hard-kills just the supervisor
+        # (TerminateProcess isn't a real signal), so its already-spawned
+        # workers would otherwise be orphaned. /T kills that whole tree.
+        if platform.system() == "Windows":
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(pool.pid)], capture_output=True)
+        else:
+            pool.terminate()
+        pool.wait(10)
 
 
 def test_load_app_errors():

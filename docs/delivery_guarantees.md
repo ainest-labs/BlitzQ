@@ -91,15 +91,19 @@ exceeds `max_deliveries` (default 5) the message is dead-lettered with reason
   see a stale state, for example `queued` just after a worker started the task, or
   the state of the first execution while a redelivered duplicate is running. When a
   task runs twice, the record of the last execution to finish wins.
-- `get_result()` is notification-driven on Redis brokers: it subscribes to a
-  per-task pub/sub channel that the worker publishes to in the same
-  transaction as the final record write, so it wakes up close to
-  immediately rather than on a poll interval. It re-checks the record itself
-  after every wake-up (a missed pub/sub message just means it waits again),
-  and falls back to a 5 s safety-net poll so a dropped notification costs
-  seconds, not an indefinite hang. `MemoryBroker` uses an in-process
-  `asyncio.Condition` instead of pub/sub, with the same behavior. It needs
-  result storage for that task; otherwise it waits until its timeout.
+- `get_result()` is notification-driven on Redis brokers: the worker
+  publishes on a per-task channel in the same transaction as the final
+  record write, and one shared `PSUBSCRIBE` connection per process (per
+  event loop) fans incoming notifications out to whichever local
+  `get_result()` calls are waiting, so it wakes up close to immediately
+  rather than on a poll interval — however many tasks are in flight at
+  once, this costs one Redis connection, not one per waiting call. It
+  re-checks the record itself after every wake-up (a missed notification
+  just means it waits again), and falls back to a 5 s safety-net poll so a
+  dropped one costs seconds, not an indefinite hang. `MemoryBroker` uses an
+  in-process `asyncio.Condition` instead of pub/sub, with the same
+  behavior. It needs result storage for that task; otherwise it waits until
+  its timeout.
 
 ## Cancellation
 

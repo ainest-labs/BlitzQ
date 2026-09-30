@@ -5,12 +5,14 @@ from __future__ import annotations
 import asyncio
 import importlib
 import json
+import multiprocessing
 import os
+import signal
 import sys
 import time
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
-from typing import Annotated, Any, Literal, TypeVar
+from typing import Annotated, Any, Literal, TypedDict, TypeVar
 
 import msgspec
 import typer
@@ -120,6 +122,154 @@ def _parse_queue_concurrency(values: list[str]) -> dict[str, int]:
     return out
 
 
+class _WorkerKwargs(TypedDict):
+    app_path: str
+    queues: list[str] | None
+    concurrency: int
+    queue_concurrency: dict[str, int]
+    batch_size: int | None
+    threads: int | None
+    processes: int | None
+    shutdown_timeout: float
+    promote: bool
+    warn_cpu_bound: bool
+    include: list[str]
+    name: str | None
+    metrics_port: int | None
+    log_level: str
+    log_format: str
+
+
+def _run_one_worker(
+    app_path: str,
+    queues: list[str] | None,
+    concurrency: int,
+    queue_concurrency: dict[str, int],
+    batch_size: int | None,
+    threads: int | None,
+    processes: int | None,
+    shutdown_timeout: float,
+    promote: bool,
+    warn_cpu_bound: bool,
+    include: list[str],
+    name: str | None,
+    metrics_port: int | None,
+    log_level: str,
+    log_format: str,
+    stop_event: Any = None,
+) -> None:
+    """Build and run one worker. Also the entry point for each child process
+    under ``--workers N > 1`` (must be a top-level function: multiprocessing
+    on Windows pickles the target rather than forking).
+
+    ``stop_event``, when given (pool mode only), is a multiprocessing.Event
+    the parent sets on shutdown; a background thread turns that into
+    ``worker.stop()``. OS signal forwarding isn't used for this because
+    ``os.kill(pid, SIGTERM)`` doesn't deliver a catchable signal on
+    Windows -- it hard-kills the process there, skipping graceful drain
+    entirely. A single (non-pool) worker still shuts down on SIGINT/SIGTERM/
+    SIGBREAK exactly as before, via run_worker's own handler.
+    """
+    from .metrics import Metrics, start_prometheus_exporter
+    from .worker import Worker, run_worker
+
+    configure_logging(log_level, log_format)
+    q = load_app(app_path)
+    for mod in include:
+        importlib.import_module(mod)
+    metrics = Metrics()
+    if metrics_port:
+        start_prometheus_exporter(metrics, metrics_port)
+    w = Worker(
+        q,
+        queues=queues,
+        concurrency=concurrency,
+        queue_concurrency=queue_concurrency,
+        batch_size=batch_size,
+        threads=threads,
+        processes=processes,
+        shutdown_timeout=shutdown_timeout,
+        promote=promote,
+        warn_cpu_bound=warn_cpu_bound,
+        name=name,
+        metrics=metrics,
+    )
+    if stop_event is not None:
+        import threading
+
+        def watch() -> None:
+            stop_event.wait()
+            w.stop()
+
+        threading.Thread(target=watch, daemon=True).start()
+    run_worker(w)
+
+
+def _run_worker_pool(
+    num_workers: int, base_metrics_port: int | None, kwargs: _WorkerKwargs
+) -> None:
+    """Spawn ``num_workers`` worker processes and supervise them like a
+    prefork pool: signal every child to drain and stop on shutdown, and
+    respawn a child that exits unexpectedly (not as part of a shutdown we
+    requested).
+
+    Each child gets its own default worker id (hostname:pid:random, see
+    Worker.__init__), so ids don't collide; an explicit --name is suffixed
+    with its slot index for the same reason. Prometheus can only bind one
+    port per process, so --metrics-port N gives child i port N + i.
+    """
+    ctx = multiprocessing.get_context("spawn")
+    stop_event = ctx.Event()
+    shutting_down = False
+
+    def spawn(slot: int) -> multiprocessing.process.BaseProcess:
+        child_kwargs: dict[str, Any] = dict(kwargs)
+        if child_kwargs.get("name"):
+            child_kwargs["name"] = f"{child_kwargs['name']}-{slot}"
+        if base_metrics_port:
+            child_kwargs["metrics_port"] = base_metrics_port + slot
+        child_kwargs["stop_event"] = stop_event
+        p = ctx.Process(target=_run_one_worker, kwargs=child_kwargs, daemon=False)
+        p.start()
+        return p
+
+    procs: dict[int, multiprocessing.process.BaseProcess] = {
+        slot: spawn(slot) for slot in range(num_workers)
+    }
+
+    def on_signal(signum: int, _frame: Any) -> None:
+        nonlocal shutting_down
+        shutting_down = True
+        typer.echo(f"blitzq: shutting down {len(procs)} worker process(es)", err=True)
+        stop_event.set()
+
+    sigs = [signal.SIGINT, signal.SIGTERM]
+    if hasattr(signal, "SIGBREAK"):
+        sigs.append(signal.SIGBREAK)
+    for sig in sigs:
+        signal.signal(sig, on_signal)
+
+    try:
+        while procs:
+            for slot, p in list(procs.items()):
+                p.join(timeout=0.5)
+                if p.is_alive():
+                    continue
+                del procs[slot]
+                if shutting_down:
+                    continue
+                typer.echo(
+                    f"blitzq: worker slot {slot} exited unexpectedly "
+                    f"(code {p.exitcode}); restarting",
+                    err=True,
+                )
+                procs[slot] = spawn(slot)
+    except KeyboardInterrupt:
+        stop_event.set()
+        for p in procs.values():
+            p.join()
+
+
 @app.command()
 def worker(
     app_path: Annotated[str, typer.Argument(metavar="APP", help="module:attribute of the Queue.")],
@@ -131,6 +281,16 @@ def worker(
         list[str] | None,
         typer.Option("--queue-concurrency", help="Per-queue limit, e.g. images=8 (repeatable)."),
     ] = None,
+    workers: Annotated[
+        int,
+        typer.Option(
+            "--workers",
+            "-w",
+            min=1,
+            help="Number of worker processes to run (forked and supervised, like a prefork pool). "
+            "Each still runs --concurrency async tasks internally.",
+        ),
+    ] = 1,
     batch_size: Annotated[int | None, typer.Option(help="Max messages per fetch.")] = None,
     threads: Annotated[int | None, typer.Option(help="Thread pool size for sync tasks.")] = None,
     processes: Annotated[
@@ -157,19 +317,9 @@ def worker(
     log_level: Annotated[str, typer.Option(envvar="BLITZQ_LOG_LEVEL")] = "INFO",
     log_format: Annotated[str, typer.Option(help="text or json")] = "text",
 ) -> None:
-    """Start a worker process."""
-    from .metrics import Metrics, start_prometheus_exporter
-    from .worker import Worker, run_worker
-
-    configure_logging(log_level, log_format)
-    q = load_app(app_path)
-    for mod in include or []:
-        importlib.import_module(mod)
-    metrics = Metrics()
-    if metrics_port:
-        start_prometheus_exporter(metrics, metrics_port)
-    w = Worker(
-        q,
+    """Start a worker process (or, with --workers N, a supervised pool of N)."""
+    kwargs = _WorkerKwargs(
+        app_path=app_path,
         queues=[s.strip() for s in queues.split(",") if s.strip()] if queues else None,
         concurrency=concurrency,
         queue_concurrency=_parse_queue_concurrency(queue_concurrency or []),
@@ -179,10 +329,16 @@ def worker(
         shutdown_timeout=shutdown_timeout,
         promote=promote,
         warn_cpu_bound=warn_cpu_bound,
+        include=include or [],
         name=name,
-        metrics=metrics,
+        metrics_port=metrics_port,
+        log_level=log_level,
+        log_format=log_format,
     )
-    run_worker(w)
+    if workers == 1:
+        _run_one_worker(**kwargs)
+    else:
+        _run_worker_pool(workers, metrics_port, kwargs)
 
 
 @app.command()

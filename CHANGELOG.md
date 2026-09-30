@@ -3,6 +3,36 @@
 All notable changes to this project are documented here. The project follows
 [Semantic Versioning](https://semver.org/).
 
+## [1.1.0] - 2026-09-30
+
+### Added
+
+- `blitzq worker --workers N`: forks and supervises N worker processes from
+  one command (a prefork-style pool), each still running its own
+  `--concurrency` async tasks. `SIGTERM`/`SIGINT` to the supervisor drains
+  and stops all N; a child that exits unexpectedly is restarted. Uses a
+  `multiprocessing.Event` rather than forwarding OS signals to children,
+  because `os.kill(pid, SIGTERM)` doesn't deliver a catchable signal on
+  Windows (it hard-kills). Equivalent to running `blitzq worker` N times
+  yourself; this is the same scaling lever the benchmark report's "Profile
+  B" already uses. See
+  [docs/performance_tuning.md](docs/performance_tuning.md#scale-out-with-processes).
+
+### Changed
+
+- `get_result()`'s push notification (added in 1.0.1) now shares one
+  pub/sub connection per process instead of opening one per waiting call.
+  Redis brokers `PSUBSCRIBE` the whole notification pattern once and fan
+  incoming messages out to local waiters in-process; a workload with
+  thousands of tasks in flight at once now costs a handful of Redis
+  connections instead of thousands. Also closes a race that could delay a
+  result by the full fallback poll interval: a task finishing and
+  publishing its notification in the gap between a caller's last check and
+  its registration as a waiter is now caught by one extra check right
+  after registering, instead of only being recovered on the next fallback
+  poll. No API change. See
+  [docs/delivery_guarantees.md](docs/delivery_guarantees.md#results-and-task-state).
+
 ## [1.0.1] - 2026-09-30
 
 ### Changed

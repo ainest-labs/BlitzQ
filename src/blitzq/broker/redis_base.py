@@ -20,9 +20,10 @@ Key layout (``{ns}`` is the namespace, default ``blitzq``)::
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 import weakref
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Any, ClassVar, Literal
 
 from redis.asyncio import BlockingConnectionPool, Redis
@@ -57,6 +58,101 @@ def _pack_sched(queue: str, data: bytes) -> bytes:
 def _unpack_sched(packed: bytes) -> tuple[str, bytes]:
     queue, _, data = packed.partition(b"\x00")
     return queue.decode(), data
+
+
+class _NotifyHub:
+    """One shared pub/sub connection per (broker, event loop), fanning out
+    task-completion notifications to any number of local ``get_result()``
+    waiters -- instead of each waiter opening its own dedicated Redis
+    connection, which turns a burst of concurrent waiters into a burst of
+    brand-new connections all arriving at once (thousands of tasks awaited
+    together via ``asyncio.gather`` means thousands of connections, all
+    fighting over Redis's single-threaded command loop to even get their
+    first command serviced).
+
+    A single ``PSUBSCRIBE {prefix}n:*`` catches every task's notification
+    channel; incoming messages just set the ``asyncio.Event`` any local
+    waiter registered for that task id. Same best-effort contract as before:
+    a missed message just means the caller's own poll loop (in
+    ``_get_result``) catches up on its next iteration.
+    """
+
+    def __init__(self, redis_factory: Callable[[], Any], pattern: str) -> None:
+        self._redis_factory = redis_factory
+        self._pattern = pattern
+        self._waiters: dict[str, list[asyncio.Event]] = {}
+        self._task: asyncio.Task[None] | None = None
+        self._subscribed = asyncio.Event()
+
+    def _ensure_started(self) -> None:
+        if self._task is None or self._task.done():
+            self._subscribed.clear()
+            self._task = asyncio.ensure_future(self._run())
+
+    async def _run(self) -> None:
+        while True:
+            pubsub = self._redis_factory().pubsub()
+            try:
+                await pubsub.psubscribe(self._pattern)
+                self._subscribed.set()
+                async for message in pubsub.listen():
+                    if message.get("type") != "pmessage":
+                        continue
+                    channel = message["channel"]
+                    if isinstance(channel, bytes):
+                        channel = channel.decode()
+                    task_id = channel.rsplit(":", 1)[-1]
+                    for event in self._waiters.get(task_id, ()):
+                        event.set()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                # Connection hiccup: brief backoff, then resubscribe. Waiters
+                # already registered keep waiting; they fall back to their
+                # own poll loop via the timeout in `wait` below regardless.
+                self._subscribed.clear()
+                await asyncio.sleep(1.0)
+            finally:
+                try:
+                    await pubsub.aclose()
+                except Exception:
+                    pass
+
+    def register(self, task_id: str) -> asyncio.Event:
+        """Register interest in ``task_id`` and return the Event that will
+        be set on notification. Split from waiting so a caller can re-check
+        the record in between: a task can finish and publish its
+        notification in the gap between the caller's last check and this
+        registration, in which case the hub discards it (no waiter existed
+        yet) -- checking once more right after registering, instead of
+        only after the full fallback timeout, is what keeps that race from
+        costing seconds instead of microseconds.
+        """
+        self._ensure_started()
+        event = asyncio.Event()
+        self._waiters.setdefault(task_id, []).append(event)
+        return event
+
+    def unregister(self, task_id: str, event: asyncio.Event) -> None:
+        events = self._waiters.get(task_id)
+        if events is not None and event in events:
+            events.remove(event)
+            if not events:
+                del self._waiters[task_id]
+
+    async def ready(self, timeout: float) -> None:
+        """Wait until the listener has actually subscribed, so a
+        notification published right after ``register`` isn't missed
+        simply because PSUBSCRIBE hadn't completed yet."""
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(self._subscribed.wait(), timeout=timeout)
+
+    async def close(self) -> None:
+        if self._task is not None:
+            self._task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._task
+            self._task = None
 
 
 class RedisBrokerBase(Broker):
@@ -99,6 +195,10 @@ class RedisBrokerBase(Broker):
         self._conns: weakref.WeakKeyDictionary[
             asyncio.AbstractEventLoop, tuple[Redis, dict[str, AsyncScript]]
         ] = weakref.WeakKeyDictionary()
+        # Same per-loop lifetime as _conns, for the same reason.
+        self._hubs: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, _NotifyHub] = (
+            weakref.WeakKeyDictionary()
+        )
 
     # -- connection management -----------------------------------------------------
     def clone(self) -> RedisBrokerBase:
@@ -136,6 +236,13 @@ class RedisBrokerBase(Broker):
     def _script(self, name: str) -> AsyncScript:
         return self._conn()[1][name]
 
+    def _hub(self) -> _NotifyHub:
+        loop = asyncio.get_running_loop()
+        hub = self._hubs.get(loop)
+        if hub is None:
+            hub = self._hubs[loop] = _NotifyHub(self._r, f"{self.prefix}n:*")
+        return hub
+
     async def connect(self) -> None:
         await self._r().ping()
 
@@ -144,7 +251,11 @@ class RedisBrokerBase(Broker):
 
     async def close(self) -> None:
         """Close the connections owned by the running event loop."""
-        conn = self._conns.pop(asyncio.get_running_loop(), None)
+        loop = asyncio.get_running_loop()
+        hub = self._hubs.pop(loop, None)
+        if hub is not None:
+            await hub.close()
+        conn = self._conns.pop(loop, None)
         if conn is not None:
             client = conn[0]
             await client.aclose()
@@ -277,33 +388,32 @@ class RedisBrokerBase(Broker):
         await self._r().set(f"{self.prefix}t:{task_id}", data, ex=ttl)
 
     async def wait_for_record(self, task_id: str, timeout: float) -> None:
-        """Block up to ``timeout`` seconds on the record's pub/sub channel.
-
-        Opens a dedicated pub/sub connection per call rather than
-        multiplexing one connection across every in-flight wait, trading
-        some connection overhead for simplicity; a high-volume ``get_result``
-        workload will hold up to one pooled connection per waiting task for
-        (at most) the wait slice below, on top of whatever the workers and
-        producers already use.
+        """Block up to ``timeout`` seconds for a notification on this task's
+        channel, via the one shared pattern-subscribed connection for this
+        (broker, event loop) -- see :class:`_NotifyHub`. However many tasks
+        are being awaited at once in this process, this costs one Redis
+        connection, not one per waiting call.
         """
-        r = self._r()
-        channel = self._rkey(task_id)
-        pubsub = r.pubsub()
+        hub = self._hub()
+        event = hub.register(task_id)
         try:
-            await pubsub.subscribe(channel)
-            # The subscribe acknowledgement is itself a message; consume it
-            # without eating into the real wait below.
-            await pubsub.get_message(timeout=0.01)
-            await pubsub.get_message(ignore_subscribe_messages=True, timeout=timeout)
+            await hub.ready(min(timeout, 5.0))
+            # Close the register-vs-publish race: the notification could
+            # have fired, and been discarded for lack of a waiter, in the
+            # gap between the caller's last check and our registration
+            # above. Recover in one extra round-trip instead of the full
+            # fallback timeout.
+            if await self.get_record(task_id) is not None:
+                return
+            await asyncio.wait_for(event.wait(), timeout=timeout)
+        except (TimeoutError, asyncio.CancelledError):
+            pass
         except Exception:
             # Connection hiccup: fall back to the caller's own poll loop
             # rather than raising out of what's meant to be best-effort.
             await asyncio.sleep(min(timeout, 1.0))
         finally:
-            try:
-                await pubsub.unsubscribe(channel)
-            finally:
-                await pubsub.aclose()
+            hub.unregister(task_id, event)
 
     # -- dead letters --------------------------------------------------------------
     async def dead_letters(self, limit: int = 100, offset: int = 0) -> list[bytes]:
