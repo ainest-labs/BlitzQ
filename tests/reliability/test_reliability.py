@@ -12,6 +12,7 @@ import time
 from pathlib import Path
 
 import pytest
+import redis
 import redis.asyncio as aioredis
 
 from blitzq import Queue, TaskState
@@ -169,7 +170,14 @@ async def test_redis_connection_kill_recovers(redis_app_factory, mode):
 
 
 async def test_redis_unavailable_briefly(redis_app_factory, mode):
-    """Redis blocks all commands for 1.5s (DEBUG SLEEP); the worker resumes afterwards."""
+    """Redis blocks all commands for 1.5s (DEBUG SLEEP); the worker resumes afterwards.
+
+    ``DEBUG SLEEP`` requires ``enable-debug-command`` (immutable: it can only be
+    set at server startup, never via ``CONFIG SET``), which docker-compose's
+    Redis service enables but a plain ``redis:*`` image - e.g. GitHub Actions'
+    ``services:`` container, which has no way to pass startup args - does not.
+    Skip rather than fail when the server refuses it.
+    """
     app = redis_app_factory(mode)
 
     @app.task
@@ -178,6 +186,12 @@ async def test_redis_unavailable_briefly(redis_app_factory, mode):
 
     admin = aioredis.Redis.from_url(REDIS_URL)
     try:
+        try:
+            await admin.execute_command("DEBUG", "SLEEP", "0")  # preflight: cheap, no delay
+        except redis.ResponseError as exc:
+            if "DEBUG command not allowed" not in str(exc):
+                raise
+            pytest.skip("Redis server has enable-debug-command disabled")
         async with running(app):
             assert await (await ping.enqueue(1)).result(10) == 1
             sleeper = asyncio.create_task(admin.execute_command("DEBUG", "SLEEP", "1.5"))
