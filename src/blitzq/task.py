@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Generic, Literal, ParamSpec, TypeVar
 from .broker.base import PublishRequest
 from .context import current_task
 from .exceptions import ConfigurationError
+from .ratelimit import RateLimit
 from .results import TaskHandle
 from .retries import RetryPolicy
 from .serialization import Envelope
@@ -39,6 +40,7 @@ class TaskOptions:
     store_result: bool
     dead_letter: bool
     priority: Priority
+    rate_limit: RateLimit | None
 
 
 def new_task_id() -> str:

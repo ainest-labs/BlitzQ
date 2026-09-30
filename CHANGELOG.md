@@ -38,6 +38,10 @@ First release. Not yet published to PyPI.
   separate broker sub-queues checked in order by every worker on every batch,
   sharing the base queue's concurrency budget; crash recovery and
   at-least-once semantics apply identically to every level.
+- Rate limiting (`@queue.task(rate_limit="10/s")`): a Redis-backed token
+  bucket per task name, shared across every worker process. A task over its
+  limit is not executed and not counted as a retry; it's rescheduled for
+  when a slot should be free.
 - Task state records with optional state tracking and result TTL.
 - CLI: `worker`, `scheduler`, `queue stats|purge`, `task inspect|retry|cancel`,
   `dead-letter list|purge`, `benchmark run|compare`.

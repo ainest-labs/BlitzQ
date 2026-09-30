@@ -13,7 +13,7 @@ and Redis. Part of [AiNest Labs](https://github.com/ainest-labs).
   recovery) and *fast* (Redis lists, at-most-once, fewest round-trips).
 - **Retries with backoff and jitter, dead letters, delayed tasks, periodic tasks,
   timeouts, cancellation, results, multiple queues with per-queue concurrency,
-  task priority within a queue.**
+  task priority within a queue, cross-worker rate limiting.**
 - **Framework-agnostic core** with optional FastAPI/Starlette, Django and Flask
   helpers.
 - **Measured against Celery** with a reproducible benchmark suite; results below,
@@ -173,6 +173,20 @@ every level. Full detail, including the one latency trade-off it makes (a
 lone `low`-priority message can wait up to `block_timeout` longer when the
 queue is otherwise idle): [docs/architecture.md#task-priority](docs/architecture.md#task-priority).
 
+### Rate limiting
+
+```python
+@queue.task(rate_limit="10/s")          # or "100/m", "1000/hour"
+async def call_downstream(): ...
+```
+
+Caps how often the task *starts*, enforced with a Redis-backed token bucket
+shared across every worker process - `"10/s"` means 10/s total, not per
+worker. A task over its limit is not executed and not counted as a retry or a
+failure; it's rescheduled for when a slot should be free, so a rate-limited
+backlog shows up as queue depth, not as a worker sleeping.
+[docs/architecture.md#rate-limiting](docs/architecture.md#rate-limiting).
+
 ## Retries
 
 ```python
@@ -288,7 +302,7 @@ details: [docs/delivery_guarantees.md](docs/delivery_guarantees.md).
 ```bash
 pip install -e ".[dev]"
 docker compose up -d redis
-pytest -q                     # 189 tests: unit, Redis integration (both modes), crash/recovery
+pytest -q                     # 212 tests: unit, Redis integration (both modes), crash/recovery
 pytest -q tests/unit          # no Redis needed
 ruff check src tests && mypy
 ```
@@ -401,8 +415,8 @@ python -m benchmarks.report --input benchmarks/results/<run-dir>
   every second). Only scheduled tasks are cancelled with certainty.
 - Without `track_state`, queued and running tasks have no inspectable record.
 - `get_result` polls; there is no push notification of completion.
-- Rate limiting, task chains/groups/chords and a web dashboard are not
-  implemented. Priority within a queue is (see above).
+- Task chains/groups/chords and a web dashboard are not implemented. Priority
+  and rate limiting within a queue are (see above).
 - Delayed-task precision is bounded by the promoter poll interval (0.5 s default)
   for tasks scheduled earlier than anything already pending.
 

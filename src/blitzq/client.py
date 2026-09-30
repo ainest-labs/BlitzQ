@@ -18,6 +18,7 @@ from ._portal import Portal
 from .broker import Broker, redis_broker
 from .broker.base import PublishRequest, QueueStats
 from .exceptions import ConfigurationError, ResultTimeout
+from .ratelimit import RateLimit, as_rate_limit
 from .results import TaskHandle, unwrap_result
 from .retries import DEFAULT_RETRY_POLICY, RetryPolicy
 from .routing import Router, Routes
@@ -175,6 +176,7 @@ class Queue:
         store_result: bool | None = None,
         dead_letter: bool = True,
         priority: Priority = "normal",
+        rate_limit: RateLimit | str | None = None,
     ) -> _TaskDecorator: ...
 
     def task(
@@ -191,6 +193,7 @@ class Queue:
         store_result: bool | None = None,
         dead_letter: bool = True,
         priority: Priority = "normal",
+        rate_limit: RateLimit | str | None = None,
     ) -> Any:
         """Register a task.
 
@@ -208,6 +211,13 @@ class Queue:
         then normal, then low) while sharing the queue's overall concurrency
         - not a separate queue you need to remember to subscribe a worker to.
         See docs/architecture.md#task-priority.
+
+        ``rate_limit`` caps how often this task *starts* execution, shared
+        across every worker (a Redis-backed token bucket, not a per-process
+        counter): ``"10/s"``, ``"100/m"`` or ``"1000/hour"``, or a
+        :class:`~blitzq.RateLimit`. A task over its limit is not executed and
+        not counted as a retry; it is rescheduled for when a slot should be
+        free. See docs/architecture.md#rate-limiting.
         """
 
         def register(f: Callable[..., Any]) -> Task[Any, Any]:
@@ -228,6 +238,7 @@ class Queue:
                 store_result=self.store_results if store_result is None else store_result,
                 dead_letter=dead_letter,
                 priority=priority,
+                rate_limit=as_rate_limit(rate_limit),
             )
             t: Task[Any, Any] = Task(self, f, opts)
             self.tasks[task_name] = t
@@ -366,7 +377,7 @@ class Queue:
             _remote,
             TaskOptions(
                 task_name, None, 1, self.default_retry_policy, None, "thread",
-                self.store_results, True, "normal",
+                self.store_results, True, "normal", None,
             ),
         )  # fmt: skip
 

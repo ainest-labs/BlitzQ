@@ -20,6 +20,7 @@ from .exceptions import (
     TaskFailed,
     TaskTimeout,
 )
+from .ratelimit import RateLimit
 from .results import TaskHandle
 from .retries import RetryPolicy
 from .schedules import Cron, Every
@@ -36,6 +37,7 @@ __all__ = [
     "MessageTooLarge",
     "Priority",
     "Queue",
+    "RateLimit",
     "ResultTimeout",
     "Retry",
     "RetryPolicy",

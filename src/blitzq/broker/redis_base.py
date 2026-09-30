@@ -33,7 +33,15 @@ from . import _lua
 from .base import Broker, Completion, PublishRequest, ScheduledEntry
 
 Mode = Literal["l", "s"]
-_SCRIPTS = ("PROMOTE", "CANCEL", "DLQ_ADD", "DLQ_REPLAY", "PERIODIC_CLAIM", "HEARTBEAT")
+_SCRIPTS = (
+    "PROMOTE",
+    "CANCEL",
+    "DLQ_ADD",
+    "DLQ_REPLAY",
+    "PERIODIC_CLAIM",
+    "HEARTBEAT",
+    "RATE_LIMIT",
+)
 
 
 def _pack_sched(queue: str, data: bytes) -> bytes:
@@ -83,6 +91,7 @@ class RedisBrokerBase(Broker):
         self.k_periodic = f"{p}periodic"
         self.k_queues = f"{p}queues"
         self.k_workers = f"{p}workers"
+        self.k_rate = f"{p}rl:"
         # One client (connection pool) per event loop: redis-py async
         # connections belong to the loop that created them, and one Queue may
         # be used from several loops at once (a web loop, a worker thread, the
@@ -346,6 +355,14 @@ class RedisBrokerBase(Broker):
     async def known_queues(self) -> set[str]:
         names = await self._r().smembers(self.k_queues)
         return {n.decode() for n in names}
+
+    # -- rate limiting ---------------------------------------------------------------
+    async def check_rate_limit(self, key: str, rate: float, capacity: float, now: float) -> float:
+        self._r()
+        allowed, wait = await self._script("RATE_LIMIT")(
+            keys=[f"{self.k_rate}{key}"], args=[now, rate, capacity]
+        )
+        return 0.0 if int(allowed) else float(wait)
 
     async def _remember_queues(self, queues: Sequence[str]) -> None:
         if queues:

@@ -274,3 +274,15 @@ class Broker(ABC):
 
     @abstractmethod
     async def purge_queue(self, queue: str) -> int: ...
+
+    # -- rate limiting ---------------------------------------------------------------
+    @abstractmethod
+    async def check_rate_limit(self, key: str, rate: float, capacity: float, now: float) -> float:
+        """Try to take one token from ``key``'s bucket (``capacity`` tokens,
+        refilling at ``rate`` tokens/second, shared across every caller).
+
+        Returns ``0.0`` if a token was taken (proceed), otherwise the number
+        of seconds to wait before a token will be available (a token is
+        *not* reserved for that wait; a task may need to check again after
+        waiting if another caller took it first).
+        """

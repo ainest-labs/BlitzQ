@@ -30,6 +30,7 @@ EVENTS = (
     "recovered",
     "requeued",
     "malformed",
+    "rate_limited",
 )
 
 

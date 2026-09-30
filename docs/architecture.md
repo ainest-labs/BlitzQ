@@ -149,6 +149,36 @@ trade-off `block_timeout` already makes for a single queue, not a new one.
 
 Periodic tasks do not currently support priority.
 
+## Rate limiting
+
+```python
+@queue.task(rate_limit="10/s")        # or "100/m", "1000/hour", or a RateLimit(...)
+async def call_downstream(): ...
+```
+
+A rate limit caps how often a task *starts* execution, enforced with a
+Redis-backed token bucket keyed by task name (`{ns}:rl:{task_name}`) - shared
+across every worker process running that task, not a per-process counter, so
+`"10/s"` means 10/s in total no matter how many workers you run. The bucket
+holds `count` tokens (one burst's worth) and refills continuously at
+`count / period_seconds` tokens/second: a limit of `"100/m"` lets 100 through
+immediately after being idle, then settles to about one every 0.6s - it does
+not release exactly 100 once a minute and nothing else in between.
+
+A task fetched while over its limit is **not executed and not counted as a
+retry or a failure** - its `attempt` is unchanged, nothing is recorded as an
+error. The worker puts it back on the schedule (the same sorted set delayed
+tasks and retries use) for the wait time the bucket reports, then the normal
+promoter picks it up again when due. This follows the same "never sleep a
+worker, reschedule instead" principle as retry backoff: a rate-limited
+backlog shows up as queue depth, not as blocked worker capacity.
+
+The check costs one Lua script call per task execution attempt (whether or
+not it is over the limit) - negligible next to the cost of actually running
+the task, but worth knowing if you are chasing a raw round-trip count on an
+otherwise trivial task. Rate limits are per task name; there is no per-queue
+or global rate limit.
+
 ## Periodic tasks
 
 - Interval schedules (`Every`) are aligned to the Unix epoch, so every scheduler

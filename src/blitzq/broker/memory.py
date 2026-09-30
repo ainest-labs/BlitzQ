@@ -44,6 +44,7 @@ class MemoryBroker(Broker):
         self._periodic: dict[str, float] = {}
         self._known: set[str] = set()
         self._workers: dict[str, tuple[bytes, float]] = {}
+        self._rate_buckets: dict[str, tuple[float, float]] = {}
 
     def clone(self) -> MemoryBroker:
         # Sharing state is the only meaningful behaviour for an in-process broker.
@@ -232,3 +233,12 @@ class MemoryBroker(Broker):
     async def purge_queue(self, queue: str) -> int:
         q = self._queues.pop(queue, None)
         return len(q) if q else 0
+
+    async def check_rate_limit(self, key: str, rate: float, capacity: float, now: float) -> float:
+        tokens, ts = self._rate_buckets.get(key, (capacity, now))
+        tokens = min(capacity, tokens + max(0.0, now - ts) * rate)
+        if tokens >= 1:
+            self._rate_buckets[key] = (tokens - 1, now)
+            return 0.0
+        self._rate_buckets[key] = (tokens, now)
+        return (1 - tokens) / rate

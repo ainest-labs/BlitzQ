@@ -397,6 +397,27 @@ async def test_priority_ordering_against_real_redis(redis_app: Queue):
     assert max(highs) < min(normals) < max(normals) < min(lows)
 
 
+async def test_rate_limit_shared_across_two_workers(redis_app_factory, mode):
+    """The token bucket is per task name in the broker, not per process."""
+    app = redis_app_factory(mode)
+    times: list[float] = []
+
+    @app.task(rate_limit="4/s")
+    async def job(i):
+        times.append(time.perf_counter())
+
+    await job.enqueue_many((i,) for i in range(12))
+    async with (
+        running(app, concurrency=10, schedule_poll_interval=0.02),
+        running(app, concurrency=10, schedule_poll_interval=0.02),
+    ):
+        await wait_for(lambda: len(times) == 12, timeout=10)
+    elapsed = max(times) - min(times)
+    # 12 tasks at 4/s with a 4-token burst: ~2s minimum: (12-4)/4. Two workers
+    # racing for the same bucket must not double the effective rate.
+    assert elapsed >= 1.8
+
+
 async def test_priority_survives_a_worker_crash_reliable_mode(redis_app_factory):
     """A high-priority message the crashed worker had claimed is recovered."""
     app = redis_app_factory("reliable", visibility_timeout=0.5)

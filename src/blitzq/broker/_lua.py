@@ -133,3 +133,35 @@ for i = 3, #ARGV do
 end
 return lost
 """
+
+# Token bucket, shared across every caller of this key. Lazily initialised
+# (a bucket that has never been touched starts full) and self-expiring (no
+# bucket lives longer than one refill cycle past its last use, so an unused
+# rate limit leaves nothing behind in Redis).
+# KEYS: bucket hash
+# ARGV: now, rate (tokens/sec), capacity
+# Returns {allowed (0/1), wait_seconds}
+RATE_LIMIT = """
+local data = redis.call('HMGET', KEYS[1], 'tokens', 'ts')
+local now = tonumber(ARGV[1])
+local rate = tonumber(ARGV[2])
+local capacity = tonumber(ARGV[3])
+local tokens = tonumber(data[1])
+local ts = tonumber(data[2])
+if tokens == nil then
+  tokens = capacity
+  ts = now
+end
+tokens = math.min(capacity, tokens + math.max(0, now - ts) * rate)
+local allowed = 0
+local wait = 0
+if tokens >= 1 then
+  tokens = tokens - 1
+  allowed = 1
+else
+  wait = (1 - tokens) / rate
+end
+redis.call('HSET', KEYS[1], 'tokens', tokens, 'ts', now)
+redis.call('EXPIRE', KEYS[1], math.ceil(capacity / rate) + 1)
+return {allowed, tostring(wait)}
+"""

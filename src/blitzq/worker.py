@@ -577,6 +577,13 @@ class Worker:
             return None
 
         opts = task.opts
+        if opts.rate_limit is not None:
+            wait = await self.broker.check_rate_limit(
+                env.task, opts.rate_limit.rate, opts.rate_limit.count, time.time()
+            )
+            if wait > 0:
+                self._defer_rate_limited(d, env, wait)
+                return None
         started = time.time()
         m.inc(queue, "started")
         m.observe_latency(queue, started - env.enqueued_at)
@@ -927,6 +934,25 @@ class Worker:
             )
         )
         logger.info("task cancelled", extra={"task_id": env.id, "task": env.task})
+
+    def _defer_rate_limited(self, d: Delivery, env: Envelope, wait: float) -> None:
+        """Put a task that is over its rate limit back on the schedule.
+
+        Not a retry: ``attempt`` is unchanged and nothing is recorded as a
+        failure, since the task never ran.
+        """
+        eta = time.time() + wait
+        nxt = msgspec.structs.replace(env, enqueued_at=eta)
+        self.metrics.inc(env.queue, "rate_limited")
+        self._submit(
+            Completion(
+                delivery=d,
+                ack=True,
+                reschedule=Reschedule(env.queue, env.id, self._ser.encode_envelope(nxt), eta),
+            )
+        )
+        if self._promote_wake is not None and wait <= self.schedule_poll_interval:
+            self._promote_wake.set()
 
     # -- background loops ----------------------------------------------------------
     async def _promote_loop(self) -> None:
