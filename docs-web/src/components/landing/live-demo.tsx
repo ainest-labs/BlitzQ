@@ -108,17 +108,30 @@ export function LiveDemo() {
     setProgress({ BlitzQ: 0, Celery: 0 });
   }
 
+  // Changing the workload/count/executor mid-run would desync the animation;
+  // reset the plain state during render, per React's "adjusting state when a
+  // prop changes" pattern (refs aren't allowed to be touched during render,
+  // so the animation-frame cleanup below stays in an effect).
+  const raceKey = `${workload}-${taskCount}-${processExecutor}`;
+  const [prevRaceKey, setPrevRaceKey] = useState(raceKey);
+  if (prevRaceKey !== raceKey) {
+    setPrevRaceKey(raceKey);
+    setRace({ status: 'idle', startedAt: 0, finishedAt: {} });
+    setProgress({ BlitzQ: 0, Celery: 0 });
+  }
+
+  useEffect(() => {
+    if (frame.current) {
+      cancelAnimationFrame(frame.current);
+      frame.current = null;
+    }
+  }, [raceKey]);
+
   useEffect(() => {
     return () => {
       if (frame.current) cancelAnimationFrame(frame.current);
     };
   }, []);
-
-  // Changing the workload/count/executor mid-run would desync the animation; just reset.
-  useEffect(() => {
-    reset();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workload, taskCount, processExecutor]);
 
   const speedup = values.BlitzQ / values.Celery;
   const blitzqWins = speedup >= 1;

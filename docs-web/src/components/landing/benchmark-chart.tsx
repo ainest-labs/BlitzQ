@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import Link from 'next/link';
 
 interface Dataset {
   key: string;
@@ -128,9 +129,9 @@ export function BenchmarkChart() {
         executor is a known weak spot; switch to{' '}
         <code className="text-fd-foreground">executor=&quot;process&quot;</code> and it ties. Full
         methodology and raw numbers in the{' '}
-        <a href="/docs/comparison-report" className="underline text-fd-foreground">
+        <Link href="/docs/comparison-report" className="underline text-fd-foreground">
           comparison report
-        </a>
+        </Link>
         .
       </p>
     </div>
