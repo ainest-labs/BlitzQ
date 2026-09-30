@@ -159,13 +159,16 @@ class Scheduler:
             logger.info("scheduler stopped", extra={"dispatched": self.dispatched})
 
     async def _promote_loop(self) -> None:
+        backoff = 0.1
         while not self._stop.is_set():
             try:
                 n, nxt = await self.broker.promote_due(time.time(), 1000)
             except Exception:
                 logger.warning("promoting scheduled tasks failed", exc_info=True)
-                await asyncio.sleep(1.0)
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, 5.0)
                 continue
+            backoff = 0.1
             if n >= 1000:
                 continue
             wait = 0.5 if nxt is None else min(0.5, max(0.0, nxt - time.time()))

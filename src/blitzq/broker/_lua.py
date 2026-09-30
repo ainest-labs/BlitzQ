@@ -17,21 +17,31 @@ local function bq_push(mode, key, data)
 end
 """
 
-# KEYS: sched zset, sched data hash, sched queue hash
+# A scheduled entry packs its queue name and message into one hash field
+# ("queue\0message") instead of two separate hashes, halving the Redis
+# commands spent on every delayed task, retry and periodic dispatch.
+_UNPACK = """
+local function bq_unpack(v)
+  local i = string.find(v, "\\0", 1, true)
+  return string.sub(v, 1, i - 1), string.sub(v, i + 1)
+end
+"""
+
+# KEYS: sched zset, sched data hash
 # ARGV: now, limit, mode, key prefix for queues (e.g. "blitzq:l:")
 # Returns {promoted, next_eta_or_false}
 PROMOTE = (
     _PUSH
+    + _UNPACK
     + """
 local ids = redis.call('ZRANGEBYSCORE', KEYS[1], '-inf', ARGV[1], 'LIMIT', 0, tonumber(ARGV[2]))
 local n = 0
 for _, id in ipairs(ids) do
-  local data = redis.call('HGET', KEYS[2], id)
-  local q = redis.call('HGET', KEYS[3], id)
+  local packed = redis.call('HGET', KEYS[2], id)
   redis.call('ZREM', KEYS[1], id)
   redis.call('HDEL', KEYS[2], id)
-  redis.call('HDEL', KEYS[3], id)
-  if data and q then
+  if packed then
+    local q, data = bq_unpack(packed)
     bq_push(ARGV[3], ARGV[4] .. q, data)
     n = n + 1
   end
@@ -44,16 +54,15 @@ return {n, false}
 """
 )
 
-# KEYS: sched zset, sched data hash, sched queue hash, revoked zset
+# KEYS: sched zset, sched data hash, revoked zset
 # ARGV: task id, revocation expiry (epoch seconds), now
 CANCEL = """
-redis.call('ZREMRANGEBYSCORE', KEYS[4], '-inf', ARGV[3])
+redis.call('ZREMRANGEBYSCORE', KEYS[3], '-inf', ARGV[3])
 if redis.call('ZREM', KEYS[1], ARGV[1]) == 1 then
   redis.call('HDEL', KEYS[2], ARGV[1])
-  redis.call('HDEL', KEYS[3], ARGV[1])
   return 1
 end
-redis.call('ZADD', KEYS[4], ARGV[2], ARGV[1])
+redis.call('ZADD', KEYS[3], ARGV[2], ARGV[1])
 return 0
 """
 

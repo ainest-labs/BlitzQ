@@ -950,6 +950,7 @@ class Worker:
         ttl = max(3, int(tick * 3))
         broker = self.broker
         next_lease = 0.0
+        backoff = 0.1
         while not self._stopping:
             try:
                 await broker.register_worker(self.id, msgspec.msgpack.encode(self.info()), ttl)
@@ -959,7 +960,16 @@ class Worker:
                     await self._renew_leases()
                     await self._recover()
             except Exception:
+                # Retry quickly (not after the full `tick`) so a transient Redis
+                # blip - a dropped connection, a brief timeout - doesn't leave
+                # lease renewal and abandoned-message recovery stalled for
+                # seconds while everything else on the worker has already
+                # reconnected.
                 logger.warning("worker maintenance failed", exc_info=True)
+                await asyncio.sleep(min(backoff, tick))
+                backoff = min(backoff * 2, tick)
+                continue
+            backoff = 0.1
             await asyncio.sleep(tick)
 
     async def _renew_leases(self) -> None:

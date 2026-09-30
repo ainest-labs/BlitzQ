@@ -5,8 +5,8 @@ Key layout (``{ns}`` is the namespace, default ``blitzq``)::
     {ns}:l:{queue}      list    runnable messages (fast mode)
     {ns}:s:{queue}      stream  runnable messages (reliable mode, group "blitzq")
     {ns}:sched          zset    task id -> due time (delayed tasks and retries)
-    {ns}:sched:d        hash    task id -> message
-    {ns}:sched:q        hash    task id -> queue name
+    {ns}:sched:d        hash    task id -> "queue\\0message" (packed together to
+                                halve the commands spent scheduling/promoting)
     {ns}:t:{id}         string  task record (state/result), with TTL
     {ns}:dlq            hash    task id -> dead-letter record
     {ns}:dlq:idx        zset    task id -> failure time
@@ -36,6 +36,21 @@ Mode = Literal["l", "s"]
 _SCRIPTS = ("PROMOTE", "CANCEL", "DLQ_ADD", "DLQ_REPLAY", "PERIODIC_CLAIM", "HEARTBEAT")
 
 
+def _pack_sched(queue: str, data: bytes) -> bytes:
+    """Pack a scheduled entry's queue name and message into one hash field.
+
+    Halves the Redis commands spent per delayed task, retry and periodic
+    dispatch versus two separate hashes. Queue names cannot contain a NUL
+    byte (BlitzQ never generates one; this isn't user-facing validation).
+    """
+    return queue.encode() + b"\x00" + data
+
+
+def _unpack_sched(packed: bytes) -> tuple[str, bytes]:
+    queue, _, data = packed.partition(b"\x00")
+    return queue.decode(), data
+
+
 class RedisBrokerBase(Broker):
     """Common Redis plumbing. Use :class:`RedisFastBroker` or :class:`RedisReliableBroker`."""
 
@@ -62,7 +77,6 @@ class RedisBrokerBase(Broker):
         self.queue_prefix = f"{p}{self._mode}:"
         self.k_sched = f"{p}sched"
         self.k_sched_d = f"{p}sched:d"
-        self.k_sched_q = f"{p}sched:q"
         self.k_dlq = f"{p}dlq"
         self.k_dlq_idx = f"{p}dlq:idx"
         self.k_revoked = f"{p}revoked"
@@ -153,8 +167,7 @@ class RedisBrokerBase(Broker):
     def _add_schedule(
         self, pipe: Pipeline, queue: str, task_id: str, data: bytes, eta: float
     ) -> None:
-        pipe.hset(self.k_sched_d, task_id, data)
-        pipe.hset(self.k_sched_q, task_id, queue)
+        pipe.hset(self.k_sched_d, task_id, _pack_sched(queue, data))
         pipe.zadd(self.k_sched, {task_id: eta})
 
     async def _add_completion(self, pipe: Pipeline, c: Completion) -> None:
@@ -196,7 +209,7 @@ class RedisBrokerBase(Broker):
     async def promote_due(self, now: float, limit: int) -> tuple[int, float | None]:
         self._r()
         res = await self._script("PROMOTE")(
-            keys=[self.k_sched, self.k_sched_d, self.k_sched_q],
+            keys=[self.k_sched, self.k_sched_d],
             args=[now, limit, self._mode, self.queue_prefix],
         )
         count = int(res[0])
@@ -209,15 +222,13 @@ class RedisBrokerBase(Broker):
         if not items:
             return []
         ids = [i for i, _ in items]
-        async with r.pipeline(transaction=False) as pipe:
-            pipe.hmget(self.k_sched_d, ids)
-            pipe.hmget(self.k_sched_q, ids)
-            datas, queues = await pipe.execute()
+        packed = await r.hmget(self.k_sched_d, ids)
         out = []
-        for (tid, eta), data, q in zip(items, datas, queues, strict=True):
-            if data is None or q is None:
+        for (tid, eta), p in zip(items, packed, strict=True):
+            if p is None:
                 continue  # promoted concurrently
-            out.append(ScheduledEntry(tid.decode(), q.decode(), float(eta), data))
+            queue, data = _unpack_sched(p)
+            out.append(ScheduledEntry(tid.decode(), queue, float(eta), data))
         return out
 
     async def scheduled_count(self) -> int:
@@ -232,7 +243,7 @@ class RedisBrokerBase(Broker):
         self._r()
         now = time.time()
         res = await self._script("CANCEL")(
-            keys=[self.k_sched, self.k_sched_d, self.k_sched_q, self.k_revoked],
+            keys=[self.k_sched, self.k_sched_d, self.k_revoked],
             args=[task_id, now + revoke_ttl, now],
         )
         return bool(res)
