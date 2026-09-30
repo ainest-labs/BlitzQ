@@ -1,0 +1,54 @@
+---
+title: retries
+description: API reference for retries.
+---
+
+Retry policies.
+
+Terminology: an *attempt* is one execution of a task. The first execution is
+attempt 1; every later attempt is a *retry*. ``retries=3`` therefore allows up
+to four attempts in total.
+
+## `class Retry`
+
+Raise from inside a task to request another attempt.
+
+``delay`` overrides the retry policy's computed backoff (seconds). The
+request still counts toward the task's maximum attempts, so explicit
+retries cannot loop forever.
+
+### `__init__(delay: float | None = None, reason: str | None = None) -> None`
+
+
+## `class RetryPolicy`
+
+Exponential backoff with optional jitter.
+
+The delay before retry ``n`` (``n = 1`` for the first retry) is
+``min(max_delay, initial_delay * backoff ** (n - 1))``. With ``jitter``
+enabled the delay is drawn uniformly from ``[delay / 2, delay]`` ("equal
+jitter"), which spreads retries of simultaneously failing tasks while
+keeping a guaranteed minimum wait.
+
+``retry_on`` lists exception types that trigger an automatic retry;
+``dont_retry_on`` takes precedence and marks exceptions as permanent
+failures. An explicit :class:`~blitzq.Retry` raised by the task is always
+honoured while attempts remain.
+
+### `__init__(initial_delay: float = 1.0, max_delay: float = 300.0, backoff: float = 2.0, jitter: bool = True, retry_on: tuple[type[BaseException], ...] = (Exception,), dont_retry_on: tuple[type[BaseException], ...] = ()) -> None`
+
+### `compute_delay(retry_number: int, rng: random.Random | None = None) -> float`
+
+Delay in seconds before retry number ``retry_number`` (1-based).
+
+### `is_retryable(exc: BaseException) -> bool`
+
+
+## `class TaskTimeout`
+
+A task exceeded its execution time limit.
+
+For ``async`` tasks the coroutine is cancelled. For thread and process
+executors the worker stops waiting, but the underlying call keeps running
+until it returns (Python cannot safely kill a thread).
+

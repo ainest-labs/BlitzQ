@@ -1,6 +1,7 @@
 # BlitzQ
 
 [![tests](https://github.com/ainest-labs/BlitzQ/actions/workflows/tests.yml/badge.svg)](https://github.com/ainest-labs/BlitzQ/actions/workflows/tests.yml)
+[![PyPI](https://img.shields.io/pypi/v/blitzq.svg)](https://pypi.org/project/blitzq/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue)](docs/installation.md#requirements)
 
@@ -19,7 +20,7 @@ and Redis. Part of [AiNest Labs](https://github.com/ainest-labs).
 - **Measured against Celery** with a reproducible benchmark suite; results below,
   including where BlitzQ is slower.
 
-> Status: 0.1.0, alpha. Not yet published on PyPI. The API may change before 1.0.
+> Status: 1.0.0, published on PyPI.
 
 ## Contents
 
@@ -39,14 +40,18 @@ and Redis. Part of [AiNest Labs](https://github.com/ainest-labs).
 
 ## Installation
 
-BlitzQ is not on PyPI yet, so install from source:
+```bash
+pip install blitzq
+pip install "blitzq[django]"      # optional: Django integration dependency
+pip install "blitzq[flask]"       # optional: Flask integration dependency
+pip install "blitzq[monitoring]"  # optional: Prometheus exporter
+```
+
+Or install from source:
 
 ```bash
 git clone https://github.com/ainest-labs/BlitzQ.git && cd BlitzQ
-pip install .                     # once released: pip install blitzq
-pip install ".[django]"           # optional: Django integration dependency
-pip install ".[flask]"            # optional: Flask integration dependency
-pip install ".[monitoring]"       # optional: Prometheus exporter
+pip install .
 ```
 
 Start a local Redis with `docker compose up -d redis`. More in
@@ -405,7 +410,6 @@ python -m benchmarks.report --input benchmarks/results/<run-dir>
 
 ## Current limitations
 
-- Not yet published on PyPI; alpha API.
 - Redis only (plus an in-memory test broker). Redis Cluster is not supported.
   Valkey, Dragonfly and KeyDB are untested.
 - No exactly-once execution. Reliable mode is at-least-once; fast mode loses

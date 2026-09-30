@@ -1,0 +1,21 @@
+---
+title: context
+description: API reference for context.
+---
+
+Per-execution task context, available to running task code.
+
+## `class TaskContext`
+
+Metadata about the currently executing task.
+
+Available through :func:`current_task` inside async tasks and tasks run on
+the thread executor. Not available inside the process executor.
+
+### `__init__(id: str, name: str, queue: str, attempt: int, max_attempts: int, correlation_id: str | None = None, headers: dict[str, str] = dict(), enqueued_at: float = 0.0, worker: str | None = None) -> None`
+
+
+## `current_task() -> TaskContext | None`
+
+Return the context of the task being executed, or ``None`` outside a task.
+

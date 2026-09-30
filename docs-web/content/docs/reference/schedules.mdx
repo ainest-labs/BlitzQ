@@ -1,0 +1,58 @@
+---
+title: schedules
+description: API reference for schedules.
+---
+
+Schedules for periodic tasks: fixed intervals and cron expressions.
+
+Occurrence identity
+-------------------
+Every schedule produces a deterministic sequence of *occurrences* (epoch
+timestamps). Interval schedules are aligned to the Unix epoch plus an
+optional offset (``every=300`` fires at :00, :05, :10, ... UTC), so every
+scheduler instance computes the same occurrences without coordination. The
+scheduler records the last dispatched occurrence per periodic task in the
+broker with an atomic compare-and-set, which is what prevents duplicate
+dispatch by concurrent schedulers.
+
+Cron expressions use five fields (minute hour day-of-month month day-of-week)
+with ``*``, lists, ranges and steps, plus ``@hourly``, ``@daily``,
+``@weekly``, ``@monthly`` and ``@yearly``. They are evaluated in the given
+IANA timezone (default UTC). Local times skipped by a DST transition do not
+fire; local times repeated by a DST transition fire once (the first time).
+When both day-of-month and day-of-week are restricted, a day matches if
+either matches (traditional cron semantics).
+
+## `class Cron`
+
+Five-field cron expression evaluated in ``tz`` (IANA name or tzinfo).
+
+### `__init__(expr: str, tz: str | tzinfo | None = None) -> None`
+
+### `next_after(ts: float) -> float`
+
+
+## `class Every`
+
+Fixed interval in seconds, aligned to the epoch plus ``offset``.
+
+### `__init__(seconds: float | timedelta, offset: float = 0.0) -> None`
+
+### `next_after(ts: float) -> float`
+
+### `occurrences(after: float, until: float, limit: int = 10000) -> list[float]`
+
+
+## `class Schedule`
+
+### `next_after(ts: float) -> float`
+
+First occurrence strictly after epoch timestamp ``ts``.
+
+### `occurrences(after: float, until: float, limit: int = 10000) -> list[float]`
+
+Occurrences in ``(after, until]``, oldest first, at most ``limit`` (the latest kept).
+
+
+## `as_schedule(value: Schedule | str | float | timedelta, tz: str | None = None) -> Schedule`
+

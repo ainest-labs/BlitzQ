@@ -1,0 +1,43 @@
+---
+title: ratelimit
+description: API reference for ratelimit.
+---
+
+Task rate limiting.
+
+A rate limit caps how often a task *starts* execution, enforced across every
+worker sharing the broker (a Redis-backed token bucket, not a per-process
+counter), so ``rate_limit="10/s"`` means 10/s total no matter how many
+workers or processes are running it.
+
+A task over its limit is not executed and not counted as a retry: the worker
+puts the message back into the schedule (the same sorted set delayed tasks
+use) for the wait time the bucket reports, then tries again - the same
+"never sleep, reschedule instead" principle retries already follow. This
+means backpressure comes from the queue depth growing, not from a worker
+thread blocking.
+
+## `class ConfigurationError`
+
+Invalid configuration or API misuse.
+
+
+## `class RateLimit`
+
+A cap of ``count`` task starts per ``period_seconds``, enforced globally.
+
+The bucket holds up to ``count`` tokens (one burst's worth) and refills
+continuously at ``count / period_seconds`` tokens/second, so a limit of
+``"100/m"`` allows a burst of 100 immediately after being idle, then
+settles to roughly one every 0.6s - it does not release exactly 100 once
+a minute.
+
+### `__init__(count: float, period_seconds: float) -> None`
+
+### `parse(spec: str) -> RateLimit`
+
+Parse ``"100"``, ``"100/s"``, ``"100/m"`` or ``"100/hour"``.
+
+
+## `as_rate_limit(value: RateLimit | str | None) -> RateLimit | None`
+

@@ -1,0 +1,81 @@
+---
+title: serialization
+description: API reference for serialization.
+---
+
+Message envelopes and safe serialization.
+
+BlitzQ never unpickles data received from a broker. Messages are encoded with
+msgspec as MessagePack (default) or JSON, which can only produce plain data:
+``None``, ``bool``, ``int``, ``float``, ``str``, ``bytes``, lists and dicts
+(plus ``datetime`` for MessagePack). Values such as ``uuid.UUID``,
+``decimal.Decimal``, dataclasses and ``msgspec.Struct`` instances are accepted
+when enqueuing but arrive in the worker in their plain-data form (``str`` or
+``dict``). Pass identifiers and primitive data rather than live objects.
+
+## `class DeadLetter`
+
+A terminally failed message kept for inspection and manual replay.
+
+
+## `class Envelope`
+
+The on-the-wire task message.
+
+Encoded positionally (``array_like``) for compactness; new fields must be
+appended with defaults so older messages keep decoding.
+
+
+## `class ErrorInfo`
+
+
+## `class MessageTooLarge`
+
+An encoded message exceeds the configured ``max_message_size``.
+
+
+## `class SerializationError`
+
+A value could not be encoded or decoded with the configured serializer.
+
+
+## `class Serializer`
+
+Encodes envelopes, task records and results.
+
+**Parameters**
+
+- `format` `Literal['msgpack', 'json']` — ``"msgpack"`` (compact, default) or ``"json"`` (human-readable in Redis).
+- `enc_hook` `Callable[[Any], Any] | None` — Optional ``msgspec`` encode hook to convert otherwise unsupported
+argument types into supported ones (for example ``lambda o: o.to_dict()``).
+- `max_message_size` `int` — Upper bound for an encoded message, enforced on both enqueue and receipt.
+
+### `__init__(format: Literal['msgpack', 'json'] = 'msgpack', enc_hook: Callable[[Any], Any] | None = None, max_message_size: int = DEFAULT_MAX_MESSAGE_SIZE) -> None`
+
+### `check_value(value: Any) -> None`
+
+Raise SerializationError if ``value`` cannot be stored as a result.
+
+### `decode_dead(data: bytes) -> DeadLetter`
+
+### `decode_envelope(data: bytes) -> Envelope`
+
+### `decode_info(data: bytes) -> TaskInfo`
+
+### `encode_dead(dead: DeadLetter) -> bytes`
+
+### `encode_envelope(env: Envelope) -> bytes`
+
+### `encode_info(info: TaskInfo) -> bytes`
+
+
+## `class TaskInfo`
+
+A snapshot of what BlitzQ knows about a task.
+
+Records are written by producers (``queued``/``scheduled`` when state
+tracking is enabled) and by workers (``running`` when tracking is enabled,
+and the final state when results are stored). Readers may observe a
+slightly stale state during concurrent transitions; see
+``docs/delivery_guarantees.md``.
+

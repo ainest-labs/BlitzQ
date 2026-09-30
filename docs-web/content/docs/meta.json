@@ -1,0 +1,15 @@
+{
+  "title": "BlitzQ",
+  "pages": [
+    "index",
+    "installation",
+    "architecture",
+    "delivery-guarantees",
+    "framework-integration",
+    "operations",
+    "performance-tuning",
+    "benchmarking",
+    "comparison-report",
+    "reference"
+  ]
+}

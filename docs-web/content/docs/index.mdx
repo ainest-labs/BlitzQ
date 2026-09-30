@@ -1,0 +1,75 @@
+---
+title: Introduction
+description: BlitzQ, a high-performance async task queue for Python built on Redis.
+---
+
+BlitzQ is a high-performance, framework-agnostic task queue for Python, built on
+`asyncio` and Redis. It's part of [AiNest Labs](https://github.com/ainest-labs).
+
+- **Async-native workers**: thousands of concurrent `async def` tasks per process;
+  sync functions on a bounded thread pool; CPU-bound functions on a process pool.
+- **Two explicit delivery modes**: *reliable* (Redis Streams, at-least-once, crash
+  recovery) and *fast* (Redis lists, at-most-once, fewest round-trips).
+- **Retries with backoff and jitter**, dead letters, delayed tasks, periodic tasks,
+  timeouts, cancellation, results, multiple queues with per-queue concurrency,
+  task priority within a queue, cross-worker rate limiting.
+- **Framework-agnostic core** with optional FastAPI/Starlette, Django and Flask
+  helpers.
+- **Measured against Celery** with a reproducible benchmark suite.
+
+<Callout title="Status">
+  1.0.0, published on PyPI: `pip install blitzq`.
+</Callout>
+
+## Requirements
+
+- Python **3.12 or 3.13**
+- Redis **7.0+** (tested with 7.4). Redis Cluster is not supported.
+- Runtime dependencies: `redis` (redis-py ≥ 5), `msgspec`, `typer`
+
+See [Installation](/docs/installation) for setup details.
+
+## Quick start
+
+```python
+# app.py
+import asyncio
+from blitzq import Queue, RetryPolicy
+
+queue = Queue(name="default", redis_url="redis://localhost:6379/0")
+
+@queue.task(retries=3, retry_policy=RetryPolicy(initial_delay=1, max_delay=60, backoff=2, jitter=True))
+async def process_order(order_id: str) -> dict:
+    return {"order_id": order_id, "processed": True}
+
+async def main():
+    task = await process_order.enqueue("ORD-123")
+    print(task.id)
+    result = await queue.get_result(task.id, timeout=10)
+    print(result)            # {'order_id': 'ORD-123', 'processed': True}
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+```bash
+blitzq worker app:queue          # terminal 1: executes tasks
+python app.py                    # terminal 2: enqueues and waits for the result
+```
+
+Runnable examples live in [`examples/`](https://github.com/ainest-labs/BlitzQ/tree/main/examples)
+in the repository: basic tasks, multiple queues, retries, scheduling, FastAPI,
+Flask and Django.
+
+## Where to go next
+
+<Cards>
+  <Card title="Installation" href="/docs/installation" description="Requirements, install steps, and running Redis." />
+  <Card title="Architecture" href="/docs/architecture" description="How BlitzQ is put together." />
+  <Card title="Delivery Guarantees" href="/docs/delivery-guarantees" description="Reliable vs. fast delivery modes." />
+  <Card title="Framework Integration" href="/docs/framework-integration" description="FastAPI, Django and Flask helpers." />
+  <Card title="Operations" href="/docs/operations" description="Running BlitzQ in production." />
+  <Card title="Performance Tuning" href="/docs/performance-tuning" description="Getting the most throughput." />
+  <Card title="Benchmarking" href="/docs/benchmarking" description="Methodology and how to reproduce results." />
+  <Card title="API Reference" href="/docs/reference" description="Generated reference for the blitzq package." />
+</Cards>

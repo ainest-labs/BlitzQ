@@ -1,12 +1,11 @@
 # Changelog
 
 All notable changes to this project are documented here. The project follows
-[Semantic Versioning](https://semver.org/). While the version is 0.x, minor
-releases may contain breaking changes.
+[Semantic Versioning](https://semver.org/).
 
 ## [1.0.0] - 2026-09-30
 
-First release. Not yet published to PyPI.
+First release, published to PyPI: `pip install blitzq`.
 
 ### Added
 

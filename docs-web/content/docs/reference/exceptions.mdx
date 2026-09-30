@@ -1,0 +1,70 @@
+---
+title: exceptions
+description: API reference for exceptions.
+---
+
+Exception types raised by BlitzQ or used to signal control flow from tasks.
+
+## `class BlitzQError`
+
+Base class for all BlitzQ errors.
+
+
+## `class ConfigurationError`
+
+Invalid configuration or API misuse.
+
+
+## `class MessageTooLarge`
+
+An encoded message exceeds the configured ``max_message_size``.
+
+
+## `class ResultNotStored`
+
+The task's result is not available (results disabled, expired, or unknown id).
+
+
+## `class ResultTimeout`
+
+No final result became available within the requested wait time.
+
+### `__init__(task_id: str, timeout: float | None, last_state: Any = None) -> None`
+
+
+## `class Retry`
+
+Raise from inside a task to request another attempt.
+
+``delay`` overrides the retry policy's computed backoff (seconds). The
+request still counts toward the task's maximum attempts, so explicit
+retries cannot loop forever.
+
+### `__init__(delay: float | None = None, reason: str | None = None) -> None`
+
+
+## `class SerializationError`
+
+A value could not be encoded or decoded with the configured serializer.
+
+
+## `class TaskFailed`
+
+Raised by result retrieval when the task finished unsuccessfully.
+
+### `__init__(task_id: str, state: str, error_type: str | None = None, error_message: str | None = None, traceback: str | None = None) -> None`
+
+
+## `class TaskTimeout`
+
+A task exceeded its execution time limit.
+
+For ``async`` tasks the coroutine is cancelled. For thread and process
+executors the worker stops waiting, but the underlying call keeps running
+until it returns (Python cannot safely kill a thread).
+
+
+## `class UnknownTask`
+
+A worker received a message for a task name that is not registered.
+

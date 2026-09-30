@@ -1,0 +1,32 @@
+---
+title: metrics
+description: API reference for metrics.
+---
+
+Low-overhead in-process metrics.
+
+Counters and a fixed-bucket duration histogram are kept per queue (never per
+task id, so label cardinality stays bounded by the number of queues). Updating
+a metric is a dict lookup and an integer add. Workers publish periodic
+snapshots to the broker for ``blitzq queue stats``; an optional Prometheus
+exporter is available with ``pip install "blitzq[monitoring]"``.
+
+## `class Metrics`
+
+### `__init__() -> None`
+
+### `inc(queue: str, event: str, n: int = 1) -> None`
+
+### `observe_duration(queue: str, seconds: float) -> None`
+
+### `observe_latency(queue: str, seconds: float) -> None`
+
+Enqueue-to-start latency (wall clock; subject to cross-host clock skew).
+
+### `snapshot() -> dict[str, Any]`
+
+
+## `start_prometheus_exporter(metrics: Metrics, port: int, addr: str = '0.0.0.0') -> None`
+
+Serve ``metrics`` on ``http://addr:port/metrics`` (requires ``prometheus-client``).
+
