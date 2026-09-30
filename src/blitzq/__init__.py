@@ -25,7 +25,7 @@ from .retries import RetryPolicy
 from .schedules import Cron, Every
 from .serialization import Serializer
 from .state import TaskInfo, TaskState
-from .task import Task
+from .task import Priority, Task
 from .worker import Worker
 
 __all__ = [
@@ -34,6 +34,7 @@ __all__ = [
     "Cron",
     "Every",
     "MessageTooLarge",
+    "Priority",
     "Queue",
     "ResultTimeout",
     "Retry",

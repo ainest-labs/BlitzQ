@@ -25,6 +25,7 @@ P = ParamSpec("P")
 R = TypeVar("R")
 
 Executor = Literal["async", "thread", "process"]
+Priority = Literal["high", "normal", "low"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,6 +38,7 @@ class TaskOptions:
     executor: Executor
     store_result: bool
     dead_letter: bool
+    priority: Priority
 
 
 def new_task_id() -> str:
@@ -66,6 +68,7 @@ class CallOptions:
     correlation_id: str | None = None
     headers: Mapping[str, str] | None = None
     timeout: float | None = None
+    priority: Priority | None = None
 
 
 class Task(Generic[P, R]):
@@ -116,6 +119,7 @@ class Task(Generic[P, R]):
         correlation_id: str | None = None,
         headers: Mapping[str, str] | None = None,
         timeout: float | None = None,
+        priority: Priority | None = None,
     ) -> BoundTask[P, R]:
         """Return a view of this task with per-call options applied.
 
@@ -123,6 +127,9 @@ class Task(Generic[P, R]):
         seconds) schedule the task for later. ``task_id`` sets an explicit id;
         enqueueing the same id twice creates two messages unless the first is
         still scheduled, in which case its schedule entry is replaced.
+        ``priority`` (``"high"``/``"normal"``/``"low"``) reorders this call
+        within its queue's shared concurrency budget; see the ``priority``
+        parameter of ``@queue.task`` for how workers pick it up.
         """
         return BoundTask(
             self,
@@ -133,6 +140,7 @@ class Task(Generic[P, R]):
                 correlation_id=correlation_id,
                 headers=headers,
                 timeout=timeout,
+                priority=priority,
             ),
         )
 
@@ -148,6 +156,7 @@ class Task(Generic[P, R]):
             correlation_id = None
             headers = None
             timeout = None
+            priority = self.opts.priority
         else:
             queue = call.queue or self.queue
             task_id = call.task_id or new_task_id()
@@ -155,6 +164,12 @@ class Task(Generic[P, R]):
             correlation_id = call.correlation_id
             headers = dict(call.headers) if call.headers else None
             timeout = call.timeout
+            priority = call.priority or self.opts.priority
+        if priority != "normal":
+            # Priority levels are physically separate broker queues, checked
+            # in order by the worker but sharing the base queue's concurrency
+            # budget - see PRIORITY_LEVELS in worker.py.
+            queue = f"{queue}:{priority}"
         parent = current_task()
         if parent is not None:
             # Propagate correlation id and trace headers to child tasks.

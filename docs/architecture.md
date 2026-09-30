@@ -103,6 +103,52 @@ enqueue and receipt.
   tasks, cancel the rest and requeue their messages, flush completions, then run
   shutdown hooks.
 
+## Task priority
+
+```python
+@queue.task(priority="high")          # decorator-level default
+async def urgent(): ...
+
+await task.options(priority="low").enqueue(x)   # per-call override
+```
+
+Priority (`"high"`, `"normal"` (default), `"low"`) is implemented as physically
+separate broker queues, not a field on the message: enqueuing with
+`priority="high"` on queue `"default"` publishes to the queue named
+`"default:high"` (`TaskHandle.queue`, `TaskInfo.queue`, dead-letter listings and
+metrics all show that name - there's no hidden name mangling to reverse).
+
+Every worker fetch loop for queue `"default"` checks `"default:high"`, then
+`"default"`, then `"default:low"`, in that order, on every batch - always, with
+no config flag to remember, so a message published at a priority the worker
+"wasn't told about" is never silently stranded. When nobody uses priority, the
+extra two checks per batch are non-blocking and return empty, costing a
+couple of cheap round-trips per *batch* (not per task) - not separately
+benchmarked, but the same shape of negligible overhead as the existing
+multi-queue fetch loop's per-queue polling.
+
+The three levels **share the queue's one concurrency budget** (`concurrency=`
+and `queue_concurrency={"default": N}`, keyed by the base name): priority
+reorders which message runs next, it does not add capacity. A worker with
+`concurrency=4` running only high-priority backlog never exceeds 4 concurrent
+executions just because normal/low levels also have work waiting.
+
+Leases, heartbeat renewal, abandoned-message recovery and reliable mode's
+consumer-group setup all operate per physical queue (`"default:high"` has its
+own Streams consumer group, its own in-flight lease tracking), so crash
+recovery and at-least-once semantics apply identically to every priority
+level - a priority message dropped by a crashed worker is redelivered exactly
+like any other message.
+
+**Trade-off, not a bug:** when a queue's higher-priority levels are empty and
+the worker blocks waiting for new work, it blocks on the *normal* level only.
+A message published only to `:low` while the queue is otherwise idle can wait
+up to `block_timeout` (default 1 s) longer than it would if published to
+`:high` or `:normal` under the same conditions - the same bounded latency
+trade-off `block_timeout` already makes for a single queue, not a new one.
+
+Periodic tasks do not currently support priority.
+
 ## Periodic tasks
 
 - Interval schedules (`Every`) are aligned to the Unix epoch, so every scheduler

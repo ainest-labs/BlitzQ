@@ -76,6 +76,21 @@ _TRACEBACK_LIMIT = 8000
 # a syscall, GIL released) measures ~0.0 regardless of concurrency, so 0.1
 # keeps a wide margin from that while still catching contended CPU-bound
 # tasks. See tests/unit/test_cpu_bound_warning.py.
+# Priority levels within one queue. Every queue is checked at all three
+# levels, in this order, on every fetch - "high" and "low" cost a couple of
+# cheap empty non-blocking round-trips per batch when nobody uses them (see
+# Worker._fetch_loop), never a whole extra fetch loop or a config flag to
+# remember to flip on, so a task published with priority="high" is never
+# silently stranded because the worker "wasn't listening" for it.
+PRIORITY_LEVELS: tuple[str, ...] = ("high", "", "low")
+
+
+def physical_queue(base: str, priority: str) -> str:
+    """The physical broker queue name for ``priority`` ("high"/"normal"/"low") of ``base``."""
+    level = "" if priority in ("", "normal") else priority
+    return base if not level else f"{base}:{level}"
+
+
 CPU_BOUND_MIN_SECONDS = 0.1
 CPU_BOUND_CPU_RATIO = 0.1
 
@@ -307,7 +322,15 @@ class Worker:
         # Strong references: asyncio keeps only weak references to tasks.
         self._inflight: set[asyncio.Task[None]] = set()
         self._cancel_reason: dict[str, str] = {}
-        self._leases: dict[str, dict[Any, Delivery]] = {q: {} for q in self.queues}
+        # One physical queue per priority level per subscribed queue (see
+        # PRIORITY_LEVELS): leases/heartbeat/recovery are keyed by the physical
+        # name (that's what the broker actually tracks), while execution
+        # concurrency (queue_limits) stays keyed by the base name only, shared
+        # across its priority levels.
+        self._physical_queues: list[str] = [
+            physical_queue(q, lvl) for q in self.queues for lvl in PRIORITY_LEVELS
+        ]
+        self._leases: dict[str, dict[Any, Delivery]] = {q: {} for q in self._physical_queues}
         self._revoked: set[str] = set()
         self._threads_pool: concurrent.futures.ThreadPoolExecutor | None = None
         self._process_pool: concurrent.futures.ProcessPoolExecutor | None = None
@@ -330,7 +353,7 @@ class Worker:
         self._stop_event = asyncio.Event()
         self._promote_wake = asyncio.Event()
         self._started_at = time.time()
-        await self.broker.prepare_consumer(self.queues, self.id)
+        await self.broker.prepare_consumer(self._physical_queues, self.id)
         # Load revocations before fetching so a new worker never runs a task
         # that was revoked while no worker was running.
         self._revoked = await self.broker.revoked()
@@ -421,11 +444,12 @@ class Worker:
         logger.info("worker stopped", extra={"worker": self.id, "processed": self.processed})
 
     # -- fetching ------------------------------------------------------------------
-    async def _fetch_loop(self, queue: str) -> None:
-        qlim = self.queue_limits[queue]
+    async def _fetch_loop(self, base: str) -> None:
+        qlim = self.queue_limits[base]
         glim = self.global_limit
         broker = self.broker
         consumer = self.id
+        levels = [physical_queue(base, lvl) for lvl in PRIORITY_LEVELS]
         backoff = 0.1
         while not self._stopping:
             await qlim.wait()
@@ -435,26 +459,41 @@ class Worker:
             n = min(qlim.free, glim.free, self.batch_size)
             qlim.take(n)
             glim.take(n)
-            try:
-                batch = await broker.fetch(queue, n, 0, consumer)
-            except Exception:
+            got: list[Delivery] = []
+            remaining = n
+            failed = False
+            for physical in levels:
+                if remaining <= 0:
+                    break
+                try:
+                    batch = await broker.fetch(physical, remaining, 0, consumer)
+                except Exception:
+                    logger.warning("fetch failed on queue %s; backing off", physical, exc_info=True)
+                    failed = True
+                    break
+                got.extend(batch)
+                remaining -= len(batch)
+            if failed:
                 qlim.release(n)
                 glim.release(n)
-                logger.warning("fetch failed on queue %s; backing off", queue, exc_info=True)
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, 5.0)
                 continue
-            if len(batch) < n:
-                qlim.release(n - len(batch))
-                glim.release(n - len(batch))
-            if not batch:
-                # Queue empty: block for one message holding only a queue slot.
+            if remaining > 0:
+                qlim.release(remaining)
+                glim.release(remaining)
+            if not got:
+                # Everything empty: block for one message holding only a queue
+                # slot. Blocks on the base (normal) level only - a message
+                # published only to :high/:low while the queue is otherwise
+                # idle waits up to block_timeout longer, the same bounded
+                # trade-off block_timeout already makes for a single queue.
                 qlim.take(1)
                 try:
-                    batch = await broker.fetch(queue, 1, self.block_timeout, consumer)
+                    batch = await broker.fetch(base, 1, self.block_timeout, consumer)
                 except Exception:
                     qlim.release(1)
-                    logger.warning("fetch failed on queue %s; backing off", queue, exc_info=True)
+                    logger.warning("fetch failed on queue %s; backing off", base, exc_info=True)
                     await asyncio.sleep(backoff)
                     backoff = min(backoff * 2, 5.0)
                     continue
@@ -470,34 +509,35 @@ class Worker:
                     for d in batch:
                         self._submit(Completion(delivery=d, ack=False, requeue=True))
                     raise
+                got = batch
             backoff = 0.1
-            for d in batch:
-                self._spawn(d)
+            for d in got:
+                self._spawn(d, base)
 
-    def _spawn(self, d: Delivery) -> None:
+    def _spawn(self, d: Delivery, base: str) -> None:
         if self._needs_ack:
             self._leases[d.queue][d.receipt] = d
-        t = asyncio.get_running_loop().create_task(self._process(d))
+        t = asyncio.get_running_loop().create_task(self._process(d, base))
         self._inflight.add(t)
         t.add_done_callback(self._inflight.discard)
 
     # -- execution -----------------------------------------------------------------
-    async def _process(self, d: Delivery) -> None:
-        queue = d.queue
+    async def _process(self, d: Delivery, base: str) -> None:
+        physical = d.queue
         release_later: concurrent.futures.Future[Any] | asyncio.Future[Any] | None = None
         try:
             release_later = await self._execute(d)
         except BaseException:
-            logger.exception("internal error while processing a message on %s", queue)
+            logger.exception("internal error while processing a message on %s", physical)
         finally:
             if self._needs_ack:
-                self._leases[queue].pop(d.receipt, None)
+                self._leases[physical].pop(d.receipt, None)
             if release_later is not None and not release_later.done():
                 # A timed-out thread/process call is still running: keep its
                 # slot until it really finishes so concurrency stays bounded.
-                release_later.add_done_callback(lambda _f: self._release(queue))
+                release_later.add_done_callback(lambda _f: self._release(base))
             else:
-                self._release(queue)
+                self._release(base)
 
     def _release(self, queue: str) -> None:
         self.queue_limits[queue].release()
@@ -985,29 +1025,33 @@ class Worker:
                 leases.pop(d.receipt, None)
 
     async def _recover(self) -> None:
-        for queue in self.queues:
-            qlim, glim = self.queue_limits[queue], self.global_limit
-            n = min(qlim.free, glim.free, self.batch_size)
-            if n <= 0 or self._stopping:
-                continue
-            qlim.take(n)
-            glim.take(n)
-            try:
-                batch = await self.broker.recover(queue, self.id, self.app.visibility_timeout, n)
-            except Exception:
-                qlim.release(n)
-                glim.release(n)
-                raise
-            if len(batch) < n:
-                qlim.release(n - len(batch))
-                glim.release(n - len(batch))
-            if batch:
-                self.metrics.inc(queue, "recovered", len(batch))
-                logger.warning(
-                    "recovered %d abandoned messages", len(batch), extra={"queue": queue}
-                )
-            for d in batch:
-                self._spawn(d)
+        for base in self.queues:
+            qlim, glim = self.queue_limits[base], self.global_limit
+            for lvl in PRIORITY_LEVELS:
+                physical = physical_queue(base, lvl)
+                n = min(qlim.free, glim.free, self.batch_size)
+                if n <= 0 or self._stopping:
+                    continue
+                qlim.take(n)
+                glim.take(n)
+                try:
+                    batch = await self.broker.recover(
+                        physical, self.id, self.app.visibility_timeout, n
+                    )
+                except Exception:
+                    qlim.release(n)
+                    glim.release(n)
+                    raise
+                if len(batch) < n:
+                    qlim.release(n - len(batch))
+                    glim.release(n - len(batch))
+                if batch:
+                    self.metrics.inc(physical, "recovered", len(batch))
+                    logger.warning(
+                        "recovered %d abandoned messages", len(batch), extra={"queue": physical}
+                    )
+                for d in batch:
+                    self._spawn(d, base)
 
 
 def _error_info(exc: BaseException, with_traceback: bool = True) -> ErrorInfo:

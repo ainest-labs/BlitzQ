@@ -24,7 +24,7 @@ from .routing import Router, Routes
 from .schedules import Schedule, as_schedule
 from .serialization import DeadLetter, Serializer
 from .state import TaskInfo, TaskState
-from .task import Executor, Task, TaskOptions, new_task_id
+from .task import Executor, Priority, Task, TaskOptions, new_task_id
 
 P = ParamSpec("P")
 R = TypeVar("R")
@@ -174,6 +174,7 @@ class Queue:
         executor: Executor | None = None,
         store_result: bool | None = None,
         dead_letter: bool = True,
+        priority: Priority = "normal",
     ) -> _TaskDecorator: ...
 
     def task(
@@ -189,6 +190,7 @@ class Queue:
         executor: Executor | None = None,
         store_result: bool | None = None,
         dead_letter: bool = True,
+        priority: Priority = "normal",
     ) -> Any:
         """Register a task.
 
@@ -198,6 +200,14 @@ class Queue:
         functions (they must be importable module-level functions).
         ``dead_letter=False`` records terminal failures as ``failed`` instead
         of moving them to the dead-letter store.
+
+        ``priority`` (``"high"``/``"normal"``/``"low"``) is this task's
+        default priority within its queue; override per call with
+        ``task.options(priority=...)``. Priority levels are physically
+        separate broker queues that every worker checks in order (high,
+        then normal, then low) while sharing the queue's overall concurrency
+        - not a separate queue you need to remember to subscribe a worker to.
+        See docs/architecture.md#task-priority.
         """
 
         def register(f: Callable[..., Any]) -> Task[Any, Any]:
@@ -217,6 +227,7 @@ class Queue:
                 executor=executor or ("async" if is_async else "thread"),
                 store_result=self.store_results if store_result is None else store_result,
                 dead_letter=dead_letter,
+                priority=priority,
             )
             t: Task[Any, Any] = Task(self, f, opts)
             self.tasks[task_name] = t
@@ -355,7 +366,7 @@ class Queue:
             _remote,
             TaskOptions(
                 task_name, None, 1, self.default_retry_policy, None, "thread",
-                self.store_results, True,
+                self.store_results, True, "normal",
             ),
         )  # fmt: skip
 

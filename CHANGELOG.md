@@ -33,6 +33,11 @@ First release. Not yet published to PyPI.
   tasks (`Every`, timezone-aware `Cron`) with deterministic occurrence ids,
   compare-and-set dispatch for multiple schedulers, and `skip`/`run_once`/`run_all`
   missed-run policies.
+- Task priority within a queue (`@queue.task(priority=...)` /
+  `task.options(priority=...)`, `"high"`/`"normal"`/`"low"`): physically
+  separate broker sub-queues checked in order by every worker on every batch,
+  sharing the base queue's concurrency budget; crash recovery and
+  at-least-once semantics apply identically to every level.
 - Task state records with optional state tracking and result TTL.
 - CLI: `worker`, `scheduler`, `queue stats|purge`, `task inspect|retry|cancel`,
   `dead-letter list|purge`, `benchmark run|compare`.

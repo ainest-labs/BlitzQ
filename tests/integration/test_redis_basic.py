@@ -375,5 +375,45 @@ async def test_worker_rejects_unknown_queue_concurrency(redis_app: Queue):
         Worker(redis_app, queues=["a"], queue_concurrency={"b": 1})
 
 
+async def test_priority_ordering_against_real_redis(redis_app: Queue):
+    order: list[str] = []
+
+    @redis_app.task
+    async def job(tag: str):
+        order.append(tag)
+
+    for i in range(4):
+        await job.options(priority="low").enqueue(f"low{i}")
+    for i in range(4):
+        await job.enqueue(f"normal{i}")
+    for i in range(4):
+        await job.options(priority="high").enqueue(f"high{i}")
+
+    async with running(redis_app, concurrency=1):
+        await wait_for(lambda: len(order) == 12, timeout=10)
+    highs = [i for i, t in enumerate(order) if t.startswith("high")]
+    normals = [i for i, t in enumerate(order) if t.startswith("normal")]
+    lows = [i for i, t in enumerate(order) if t.startswith("low")]
+    assert max(highs) < min(normals) < max(normals) < min(lows)
+
+
+async def test_priority_survives_a_worker_crash_reliable_mode(redis_app_factory):
+    """A high-priority message the crashed worker had claimed is recovered."""
+    app = redis_app_factory("reliable", visibility_timeout=0.5)
+
+    @app.task
+    async def job(tag: str):
+        return tag
+
+    h = await job.options(priority="high").enqueue("h1")
+    broker = app.broker
+    await broker.prepare_consumer(["default:high"], "ghost")
+    claimed = await broker.fetch("default:high", 1, 0, "ghost")
+    assert len(claimed) == 1
+    await asyncio.sleep(0.7)  # past visibility_timeout: "ghost" never acks
+    async with running(app, heartbeat_interval=0.1):
+        assert await app.get_result(h.id, timeout=10) == "h1"
+
+
 def test_unique_ns_helper():
     assert unique_ns() != unique_ns()

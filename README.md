@@ -12,7 +12,8 @@ and Redis. Part of [AiNest Labs](https://github.com/ainest-labs).
 - **Two explicit delivery modes:** *reliable* (Redis Streams, at-least-once, crash
   recovery) and *fast* (Redis lists, at-most-once, fewest round-trips).
 - **Retries with backoff and jitter, dead letters, delayed tasks, periodic tasks,
-  timeouts, cancellation, results, multiple queues with per-queue concurrency.**
+  timeouts, cancellation, results, multiple queues with per-queue concurrency,
+  task priority within a queue.**
 - **Framework-agnostic core** with optional FastAPI/Starlette, Django and Flask
   helpers.
 - **Measured against Celery** with a reproducible benchmark suite; results below,
@@ -146,13 +147,31 @@ queue = Queue("default", routes={"app.images.*": "images", "*.send_*": "emails"}
 @queue.task(queue="reports")        # explicit queue beats routing rules
 def build_report(report_id: int): ...
 
-await build_report.options(queue="priority").enqueue(7)   # per call beats both
+await build_report.options(queue="urgent").enqueue(7)   # per call beats both
 ```
 
 Each subscribed queue has its own fetch loop, and fetching reserves capacity
 first, so a flooded queue cannot starve a quiet one. Cap busy queues with
 `--queue-concurrency`, and run separate worker pools per queue to scale them
 independently (tested in `tests/integration/test_redis_basic.py`).
+
+### Priority within a queue
+
+```python
+@queue.task(priority="high")                       # decorator default
+async def urgent(): ...
+
+await task.options(priority="low").enqueue(x)       # per-call override
+```
+
+`"high"`/`"normal"` (default)/`"low"`. Every worker checks a queue's levels in
+that order on every batch, always - there's no separate config to remember, so
+a `priority="high"` call is never silently unheard. All three levels share the
+queue's one concurrency budget (priority reorders what runs next, it doesn't
+add capacity), and crash recovery/at-least-once semantics apply identically to
+every level. Full detail, including the one latency trade-off it makes (a
+lone `low`-priority message can wait up to `block_timeout` longer when the
+queue is otherwise idle): [docs/architecture.md#task-priority](docs/architecture.md#task-priority).
 
 ## Retries
 
@@ -269,7 +288,7 @@ details: [docs/delivery_guarantees.md](docs/delivery_guarantees.md).
 ```bash
 pip install -e ".[dev]"
 docker compose up -d redis
-pytest -q                     # 164 tests: unit, Redis integration (both modes), crash/recovery
+pytest -q                     # 189 tests: unit, Redis integration (both modes), crash/recovery
 pytest -q tests/unit          # no Redis needed
 ruff check src tests && mypy
 ```
@@ -382,8 +401,8 @@ python -m benchmarks.report --input benchmarks/results/<run-dir>
   every second). Only scheduled tasks are cancelled with certainty.
 - Without `track_state`, queued and running tasks have no inspectable record.
 - `get_result` polls; there is no push notification of completion.
-- Priorities within a queue, rate limiting, task chains/groups/chords and a web
-  dashboard are not implemented.
+- Rate limiting, task chains/groups/chords and a web dashboard are not
+  implemented. Priority within a queue is (see above).
 - Delayed-task precision is bounded by the promoter poll interval (0.5 s default)
   for tasks scheduled earlier than anything already pending.
 
