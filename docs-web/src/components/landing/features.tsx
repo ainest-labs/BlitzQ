@@ -7,7 +7,7 @@ const features = [
   {
     title: 'Two explicit delivery modes',
     description:
-      'reliable (Redis Streams, at-least-once, crash recovery) and fast (Redis lists, at-most-once, fewest round-trips) — you choose per queue.',
+      'reliable (Redis Streams, at-least-once, crash recovery) and fast (Redis lists, at-most-once, fewest round-trips) - you choose per queue.',
   },
   {
     title: 'Batteries included',
@@ -17,7 +17,7 @@ const features = [
   {
     title: 'Framework-agnostic',
     description:
-      'A plain Python core with optional FastAPI/Starlette, Django and Flask helpers — use it from any stack.',
+      'A plain Python core with optional FastAPI/Starlette, Django and Flask helpers - use it from any stack.',
   },
 ];
 

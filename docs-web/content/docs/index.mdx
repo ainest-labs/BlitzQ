@@ -8,6 +8,8 @@ BlitzQ is a high-performance, framework-agnostic task queue for Python, built on
 
 - **Async-native workers**: thousands of concurrent `async def` tasks per process;
   sync functions on a bounded thread pool; CPU-bound functions on a process pool.
+  Scale across processes with `--workers N`, a supervised prefork-style pool
+  from one command.
 - **Two explicit delivery modes**: *reliable* (Redis Streams, at-least-once, crash
   recovery) and *fast* (Redis lists, at-most-once, fewest round-trips).
 - **Retries with backoff and jitter**, dead letters, delayed tasks, periodic tasks,
@@ -18,7 +20,7 @@ BlitzQ is a high-performance, framework-agnostic task queue for Python, built on
 - **Measured against Celery** with a reproducible benchmark suite.
 
 <Callout title="Status">
-  1.0.0, published on PyPI: `pip install blitzq`.
+  1.1.0, published on PyPI: `pip install blitzq`.
 </Callout>
 
 ## Requirements

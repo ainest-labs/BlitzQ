@@ -14,37 +14,37 @@ interface Dataset {
 const datasets: Dataset[] = [
   {
     key: 'noop-equal',
-    label: 'No-op tasks — equal settings',
+    label: 'No-op tasks - equal settings',
     unit: 'tasks/sec',
     values: { BlitzQ: 2604, Celery: 855, Huey: 1499 },
   },
   {
     key: 'noop-tuned',
-    label: 'No-op tasks — each system tuned',
+    label: 'No-op tasks - each system tuned',
     unit: 'tasks/sec',
     values: { BlitzQ: 63542, Celery: 3139, Huey: 6024 },
   },
   {
     key: 'io-tuned',
-    label: '20ms I/O task — each system tuned',
+    label: '20ms I/O task - each system tuned',
     unit: 'tasks/sec',
     values: { BlitzQ: 41807, Celery: 2632, Huey: 8657 },
   },
   {
     key: 'retry',
-    label: 'Retry-heavy (50% fail once) — tuned',
+    label: 'Retry-heavy (50% fail once) - tuned',
     unit: 'tasks/sec',
     values: { BlitzQ: 8577, Celery: 1370, Huey: 1956 },
   },
   {
     key: 'cpu-thread',
-    label: 'CPU-bound — default thread executor',
+    label: 'CPU-bound - default thread executor',
     unit: 'tasks/sec',
     values: { BlitzQ: 73, Celery: 486, Huey: 70 },
   },
   {
     key: 'cpu-process',
-    label: 'CPU-bound — process pools, 8 each',
+    label: 'CPU-bound - process pools, 8 each',
     unit: 'tasks/sec',
     values: { BlitzQ: 472, Celery: 445, Huey: 478 },
   },
@@ -125,7 +125,7 @@ export function BenchmarkChart() {
 
       <p className="mt-6 text-xs text-fd-muted-foreground">
         Median of 5 runs, synthetic task bodies, {active.lowerIsBetter ? 'lower is better' : 'higher is better'}.
-        BlitzQ is not fastest everywhere — CPU-bound work on the default thread
+        BlitzQ is not fastest everywhere - CPU-bound work on the default thread
         executor is a known weak spot; switch to{' '}
         <code className="text-fd-foreground">executor=&quot;process&quot;</code> and it ties. Full
         methodology and raw numbers in the{' '}

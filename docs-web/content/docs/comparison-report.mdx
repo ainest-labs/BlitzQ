@@ -5,7 +5,7 @@ description: Comparison Report for BlitzQ.
 
 One consolidated report: what each system is, its pros and cons, and measured
 speed/reliability/footprint numbers from BlitzQ's benchmark suite. All numbers
-here are pulled directly from the raw run data — nothing is estimated or
+here are pulled directly from the raw run data - nothing is estimated or
 rounded from memory. Full methodology: [docs/benchmarking.md](/docs/benchmarking).
 Full raw reports: [`benchmarks/results/published/suite/REPORT.md`](../benchmarks/results/published/suite/REPORT.md)
 (BlitzQ vs Celery) and [`benchmarks/results/published/huey_suite/REPORT.md`](../benchmarks/results/published/huey_suite/REPORT.md)
@@ -43,7 +43,7 @@ meaningful work will shrink every ratio below.
 
 **Pros**
 - Fastest in every benchmark except CPU-bound work (where it ties both), often
-  by a wide margin — see §3.
+  by a wide margin - see §3.
 - Explicit, honestly-documented delivery guarantees; never claims exactly-once.
 - Lowest resource footprint measured: ~39 MB worker RSS vs ~775–815 MB for
   Celery's prefork pool on the same task (see §5).
@@ -57,12 +57,12 @@ meaningful work will shrink every ratio below.
 **Cons**
 - **1.0.0, new.** Just published to PyPI; no production track record yet.
 - CPU-bound tasks on the default thread executor are GIL-bound (measured
-  0.15x vs Celery's prefork at equal settings) — must explicitly opt into
+  0.15x vs Celery's prefork at equal settings) - must explicitly opt into
   `executor="process"` to be competitive.
 - Slightly slower recovery after a Redis connection interruption than Celery
   in the one metric measured (5.1 s vs 4.4 s).
 - Delayed/ETA tasks start later at p50 under heavy tuned load than Celery's
-  equivalent (13 ms vs 0.6 ms) — a side effect of promoter polling.
+  equivalent (13 ms vs 0.6 ms) - a side effect of promoter polling.
 - Redis only; no other broker.
 - Smaller ecosystem: no Flower-equivalent dashboard, fewer third-party
   integrations, far fewer people who have run it in production.
@@ -80,16 +80,16 @@ meaningful work will shrink every ratio below.
 
 **Cons**
 - Slowest of the three systems on overhead-dominated workloads (no-op,
-  payloads, retries, results) at both equal and tuned settings — measured
+  payloads, retries, results) at both equal and tuned settings - measured
   3–29x slower than BlitzQ depending on workload and tuning.
 - By far the heaviest footprint measured: ~780 MB peak worker RSS for a
   16-child prefork pool doing nothing, vs ~39–43 MB for BlitzQ/Huey.
 - Crash recovery in at-least-once mode was measured at ~102 s regardless of
-  a 10 s `visibility_timeout` setting — kombu's Redis transport only checks
+  a 10 s `visibility_timeout` setting - kombu's Redis transport only checks
   for restorable messages on a fixed ~10-tick cycle. Not configurable without
   patching kombu.
 - Its `threads` worker pool measured 4–5 tasks/s on a 50 ms I/O workload
-  (vs 153/s for prefork-8) — stalls under this benchmark's conditions; not
+  (vs 153/s for prefork-8) - stalls under this benchmark's conditions; not
   root-caused, but the practical implication is: don't reach for `threads`
   for I/O-bound Celery work.
 - Its `gevent` worker pool capped at ~230 tasks/s regardless of pool size or
@@ -105,10 +105,10 @@ meaningful work will shrink every ratio below.
 - Lowest, flattest Redis command cost measured: exactly 4 commands per task
   across every workload tested, regardless of features used.
 - Its `process` worker type matched BlitzQ's process executor almost exactly
-  on CPU-bound work (0.98–1.04x either way — a genuine tie, not a rounding
+  on CPU-bound work (0.98–1.04x either way - a genuine tie, not a rounding
   artifact).
 - Comparable worker-crash loss and recovery time to BlitzQ's fast mode (both
-  lost 15–16 of 2,000 tasks, both recovered in ~5 s) — no disadvantage there.
+  lost 15–16 of 2,000 tasks, both recovered in ~5 s) - no disadvantage there.
 - Built-in Django integration, simple decorator API.
 
 **Cons**
@@ -119,16 +119,16 @@ meaningful work will shrink every ratio below.
 - Slower than BlitzQ on nearly everything except CPU-bound work: 1.9–29x at
   equal/tuned settings on overhead-dominated workloads, 3.1–4.7x on retries.
 - Its `greenlet` worker type does not monkey-patch the standard library
-  itself — a plain `time.sleep`-based task blocks every greenlet on that
+  itself - a plain `time.sleep`-based task blocks every greenlet on that
   worker instead of yielding. (Found in this benchmark: 48 tasks/s until
   `gevent.monkey.patch_all()` was applied manually, 2,750 tasks/s after.)
   Anyone using greenlet workers with ordinary synchronous code needs to know
   to patch manually.
-- No native multi-queue routing — one Huey instance per queue, coordinated
+- No native multi-queue routing - one Huey instance per queue, coordinated
   manually.
-- No batch/pipelined publish API — every enqueue is one round-trip.
+- No batch/pipelined publish API - every enqueue is one round-trip.
 - Scheduled tasks lagged their due time more than the other two systems in
-  this benchmark (p50 1.0–2.1 s late on a 2 s delay) — a consequence of its
+  this benchmark (p50 1.0–2.1 s late on a 2 s delay) - a consequence of its
   default 1 s scheduler poll interval (configurable, left at default here).
 - Smaller ecosystem and less production track record than Celery.
 
@@ -145,37 +145,37 @@ mode/default-ack). Huey has no `alo` mode, so it only appears under `amo`.
 
 | Workload | Profile | BlitzQ | Celery | Huey | BlitzQ vs Celery | BlitzQ vs Huey |
 |---|---|---:|---:|---:|---:|---:|
-| no-op | A-alo / A-amo | 2,604 / 2,689 | 855 / 865 | — / 1,499 | 3.05x / 3.11x | — / 1.90x |
-| no-op | B-alo / B-amo | 63,542 | 3,139 | — / 6,024 | 20.24x | — / 20.99x |
-| no-op, pre-loaded backlog | A-alo / A-amo | 5,503 / 7,204\* | 967 / 984 | — / 1,438 | 5.69x / 7.52x | — / 5.01x |
-| no-op, pre-loaded backlog | B-alo / B-amo | 70,696 | 3,738 | — / 5,414 | 18.91x | — / 28.76x |
-| 1 KiB payload | A-alo / A-amo | 2,771 / — | 919 / — | — / 1,418 | 3.02x | — / 1.89x |
-| 1 KiB payload | B-alo / B-amo | 59,270 | 3,129 | — / 5,731 | 18.94x | — / 17.28x |
+| no-op | A-alo / A-amo | 2,604 / 2,689 | 855 / 865 | - / 1,499 | 3.05x / 3.11x | - / 1.90x |
+| no-op | B-alo / B-amo | 63,542 | 3,139 | - / 6,024 | 20.24x | - / 20.99x |
+| no-op, pre-loaded backlog | A-alo / A-amo | 5,503 / 7,204\* | 967 / 984 | - / 1,438 | 5.69x / 7.52x | - / 5.01x |
+| no-op, pre-loaded backlog | B-alo / B-amo | 70,696 | 3,738 | - / 5,414 | 18.91x | - / 28.76x |
+| 1 KiB payload | A-alo / A-amo | 2,771 / - | 919 / - | - / 1,418 | 3.02x | - / 1.89x |
+| 1 KiB payload | B-alo / B-amo | 59,270 | 3,129 | - / 5,731 | 18.94x | - / 17.28x |
 | 100 KiB payload | A-alo | 2,296 | 474 | n/a | 4.84x | n/a |
 | 100 KiB payload | B-alo | 3,812 | 1,265 | n/a | 3.01x | n/a |
-| 20 ms I/O task | A-alo / A-amo | 755 / — | 720 / — | — / 762 | 1.05x | — / 1.01x |
-| 20 ms I/O (tuned executors) | B-alo / B-amo | 41,807 / 62,120 | 2,632 | — / 8,657 | 15.89x | — / 7.18x |
-| **CPU-bound** (threads/prefork) | A-alo / A-amo | 73 | **486** | — / 70 | **0.15x** | — / 1.04x |
-| CPU-bound (process pools, 8 each) | B-alo / B-amo | 472 / 467 | 445 | — / 478 | 1.06x | — / **0.98x** |
-| burst-publish | A-alo / A-amo | 2,777 / 2,806\* | 947 / 964 | — / 1,480 | 2.93x / 2.97x | — / 1.90x |
-| burst-publish | B-alo / B-amo | 62,749 / — | 3,335 | — / 5,871 | 18.81x | — / 22.53x |
-| multi-queue (80/15/5 split) | A-alo / A-amo | 2,730 / — | 933 | — / 1,835 | 2.93x | — / 1.50x |
-| multi-queue (80/15/5 split) | B-alo / B-amo | 62,496 / 110,537 | 3,277 | — / 5,797 | 19.07x | — / 19.07x |
-| retry-heavy (50% fail once) | A-alo / A-amo | 1,745 / 1,914 | 497 | — / 609 | 3.51x | — / 3.14x |
-| retry-heavy | B-alo / B-amo | 8,577 / 9,218 | 1,370 | — / 1,956 | 6.26x | — / 4.71x |
-| result storage on | A-alo / A-amo | 2,784 / 2,746 | 1,002 | — / 1,459 | 2.78x | — / 1.88x |
-| result storage on | B-alo / B-amo | 49,521 / 70,449 | 2,748 | — / 5,596 | 18.02x | — / 12.59x |
-| scheduled (2 s delay; throughput bounded by the delay — see §4) | A-alo / A-amo | 1,273 / 1,245 | 914 | — / 742 | 1.39x | — / 1.68x |
-| scheduled | B-alo / B-amo | 2,359 / 2,419 | 1,749 | — / 1,200 | 1.35x | — / 2.02x |
+| 20 ms I/O task | A-alo / A-amo | 755 / - | 720 / - | - / 762 | 1.05x | - / 1.01x |
+| 20 ms I/O (tuned executors) | B-alo / B-amo | 41,807 / 62,120 | 2,632 | - / 8,657 | 15.89x | - / 7.18x |
+| **CPU-bound** (threads/prefork) | A-alo / A-amo | 73 | **486** | - / 70 | **0.15x** | - / 1.04x |
+| CPU-bound (process pools, 8 each) | B-alo / B-amo | 472 / 467 | 445 | - / 478 | 1.06x | - / **0.98x** |
+| burst-publish | A-alo / A-amo | 2,777 / 2,806\* | 947 / 964 | - / 1,480 | 2.93x / 2.97x | - / 1.90x |
+| burst-publish | B-alo / B-amo | 62,749 / - | 3,335 | - / 5,871 | 18.81x | - / 22.53x |
+| multi-queue (80/15/5 split) | A-alo / A-amo | 2,730 / - | 933 | - / 1,835 | 2.93x | - / 1.50x |
+| multi-queue (80/15/5 split) | B-alo / B-amo | 62,496 / 110,537 | 3,277 | - / 5,797 | 19.07x | - / 19.07x |
+| retry-heavy (50% fail once) | A-alo / A-amo | 1,745 / 1,914 | 497 | - / 609 | 3.51x | - / 3.14x |
+| retry-heavy | B-alo / B-amo | 8,577 / 9,218 | 1,370 | - / 1,956 | 6.26x | - / 4.71x |
+| result storage on | A-alo / A-amo | 2,784 / 2,746 | 1,002 | - / 1,459 | 2.78x | - / 1.88x |
+| result storage on | B-alo / B-amo | 49,521 / 70,449 | 2,748 | - / 5,596 | 18.02x | - / 12.59x |
+| scheduled (2 s delay; throughput bounded by the delay - see §4) | A-alo / A-amo | 1,273 / 1,245 | 914 | - / 742 | 1.39x | - / 1.68x |
+| scheduled | B-alo / B-amo | 2,359 / 2,419 | 1,749 | - / 1,200 | 1.35x | - / 2.02x |
 
 \* BlitzQ's A-amo figure differs slightly between the two suites (7,407 vs
 Celery, 7,204 vs Huey; 2,862 vs Celery, 2,806 vs Huey) even though the settings
-are identical — this is ordinary run-to-run variation from running the two
+are identical - this is ordinary run-to-run variation from running the two
 suites at different times, well within the CV% reported in the full reports.
 
 **Reading this table:** the two suites were run separately, so BlitzQ's own
 figures can differ between its "vs Celery" and "vs Huey" columns even for the
-same workload name — BlitzQ used reliable mode (`alo`) with 1 producer against
+same workload name - BlitzQ used reliable mode (`alo`) with 1 producer against
 Celery, and fast mode (`amo`) with 4 producers against Huey, matched to what
 each competitor could actually be paired against (Huey has no `alo` mode).
 Within one comparison (BlitzQ vs Celery, or BlitzQ vs Huey) the settings are
@@ -190,7 +190,7 @@ exact settings behind every number. Bold marks the one workload class
 
 | Test | BlitzQ | Celery | Huey |
 |---|---|---|---|
-| **Worker SIGKILL'd mid-task, at-least-once mode** | 0 lost, recovered in 16.9 s, 1 duplicate execution across 5 runs | 0 lost, recovered in **101.6 s** (fixed ~10 s Redis-transport restore cycle, independent of `visibility_timeout`) | no at-least-once mode — not applicable |
+| **Worker SIGKILL'd mid-task, at-least-once mode** | 0 lost, recovered in 16.9 s, 1 duplicate execution across 5 runs | 0 lost, recovered in **101.6 s** (fixed ~10 s Redis-transport restore cycle, independent of `visibility_timeout`) | no at-least-once mode - not applicable |
 | **Worker SIGKILL'd mid-task, early-ack mode** | 15–16 of 2,000 lost per crash (the tasks executing at the kill); recovered in 5.3 s | 15–16 of 2,000 lost per crash; recovered in 101.6 s | 15–16 of 2,000 lost per crash; recovered in 5.1 s |
 | **All Redis connections dropped mid-run, at-least-once** | 0 lost, 0 duplicates | 0 lost, **77 duplicate executions** across 5 runs | not applicable (no at-least-once mode) |
 | **All Redis connections dropped mid-run, early-ack** | 0 lost, 0 duplicates, recovered in 4.8 s | 0 lost, 2 duplicates, recovered in 4.1 s | not measured in this suite |
@@ -244,7 +244,7 @@ sync-function workloads.
   BlitzQ's async model pulls well ahead once each system is allowed its best
   configuration (7–16x).
 - **Crash resilience:** BlitzQ's reliable mode is the strongest result in this
-  report — zero loss and the fastest recovery of any at-least-once
+  report - zero loss and the fastest recovery of any at-least-once
   configuration measured. Huey has no equivalent mode at all.
 - **Maturity and ecosystem** are not something a benchmark measures: Celery
   is a known quantity in production; BlitzQ is 1.0.0 and newly published; Huey

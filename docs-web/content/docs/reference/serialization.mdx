@@ -45,10 +45,10 @@ Encodes envelopes, task records and results.
 
 **Parameters**
 
-- `format` `Literal['msgpack', 'json']` — ``"msgpack"`` (compact, default) or ``"json"`` (human-readable in Redis).
-- `enc_hook` `Callable[[Any], Any] | None` — Optional ``msgspec`` encode hook to convert otherwise unsupported
+- `format` `Literal['msgpack', 'json']` - ``"msgpack"`` (compact, default) or ``"json"`` (human-readable in Redis).
+- `enc_hook` `Callable[[Any], Any] | None` - Optional ``msgspec`` encode hook to convert otherwise unsupported
 argument types into supported ones (for example ``lambda o: o.to_dict()``).
-- `max_message_size` `int` — Upper bound for an encoded message, enforced on both enqueue and receipt.
+- `max_message_size` `int` - Upper bound for an encoded message, enforced on both enqueue and receipt.
 
 ### `__init__(format: Literal['msgpack', 'json'] = 'msgpack', enc_hook: Callable[[Any], Any] | None = None, max_message_size: int = DEFAULT_MAX_MESSAGE_SIZE) -> None`
 

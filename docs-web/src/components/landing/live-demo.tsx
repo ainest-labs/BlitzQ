@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 
 // Measured tasks/sec at equal settings (1 worker process, 16 slots) from the
-// comparison report — real numbers, only the animation's wall-clock speed is
+// comparison report - real numbers, only the animation's wall-clock speed is
 // scaled down so a race is watchable instead of instant.
 interface WorkloadDef {
   label: string;
@@ -13,10 +13,10 @@ interface WorkloadDef {
   processHint?: string;
 }
 
-const WORKLOADS: Record<'noop' | 'io' | 'retry' | 'cpu', WorkloadDef> = {
+const WORKLOADS: Record<'noop' | 'io' | 'retry' | 'cpu' | 'pool', WorkloadDef> = {
   noop: {
     label: 'No-op task',
-    hint: 'Bare function call — pure dispatch overhead.',
+    hint: 'Bare function call - pure dispatch overhead.',
     values: { BlitzQ: 2604, Celery: 855 },
   },
   io: {
@@ -36,6 +36,11 @@ const WORKLOADS: Record<'noop' | 'io' | 'retry' | 'cpu', WorkloadDef> = {
     processValues: { BlitzQ: 472, Celery: 445 },
     processHint:
       'With executor="process" (8 worker processes each), BlitzQ ties Celery\'s prefork pool.',
+  },
+  pool: {
+    label: 'Worker pool (2000 tasks)',
+    hint: 'blitzq worker --workers 4 --concurrency 25 vs Celery prefork, concurrency=16 - a real HTTP-call task, measured end-to-end on the same machine (separate from the equal-settings numbers above).',
+    values: { BlitzQ: 328.8, Celery: 283.2 },
   },
 };
 
@@ -181,10 +186,10 @@ export function LiveDemo() {
         <div className="mb-4 rounded-lg border border-fd-border bg-fd-secondary/20 p-3">
           <p className="text-xs text-fd-muted-foreground mb-3">
             By default a BlitzQ task runs on a thread pool, and threads share one Python
-            interpreter — a CPU-heavy task blocks the others (the GIL). Passing{' '}
+            interpreter - a CPU-heavy task blocks the others (the GIL). Passing{' '}
             <code className="text-fd-foreground">@queue.task(executor=&quot;process&quot;)</code>{' '}
             moves that task onto a separate worker process instead, one per CPU core, so
-            CPU-bound work actually runs in parallel — matching what Celery&apos;s prefork
+            CPU-bound work actually runs in parallel - matching what Celery&apos;s prefork
             pool does by default.
           </p>
           <label className="flex items-center gap-3 cursor-pointer select-none w-fit">

@@ -41,7 +41,7 @@ All notable changes to this project are documented here. The project follows
   publish on a per-task pub/sub channel in the same transaction as the final
   record write; `get_result()` waits on that instead, with a 5 s safety-net
   poll in case a notification is dropped. `MemoryBroker` uses an in-process
-  `asyncio.Condition` for the same effect. No API change — same signature,
+  `asyncio.Condition` for the same effect. No API change - same signature,
   same exceptions, just lower latency and less Redis traffic under load. See
   [docs/delivery_guarantees.md](docs/delivery_guarantees.md#results-and-task-state).
 

@@ -45,6 +45,16 @@ no-op drain throughput went from about 17k tasks/s with 1 worker process to abou
 (`benchmarks/results/published/tuning/`). Run roughly one worker process per core you
 want to dedicate, and size `--concurrency` per process.
 
+`--workers N` does this for you from one command: it forks and supervises N
+worker processes (each still running its own `--concurrency` async tasks
+internally), matching what you'd otherwise get from starting `blitzq worker`
+N times yourself. `SIGTERM`/`SIGINT` to the supervisor drains and stops all N;
+a child that exits unexpectedly is restarted. This is the same lever Celery's
+`prefork` pool uses for CPU parallelism and I/O throughput beyond one process
+-- on an I/O-bound workload (20ms simulated upstream call), `--workers 4
+--concurrency 25` measured faster end-to-end than Celery's `prefork`
+concurrency=16 on the same machine, using a quarter of the OS processes.
+
 ## Knobs
 
 | Setting | Default | Effect |

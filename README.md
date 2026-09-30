@@ -143,7 +143,7 @@ Python you can also run `await Worker(queue, concurrency=50).run()`.
 run at once in one worker process. Async tasks are cheap coroutines (use
 hundreds). Sync tasks occupy one of `--threads` pool threads. `executor="process"`
 tasks occupy one of `--processes` pool processes. Scale CPU capacity by running
-more worker processes — either yourself (multiple `blitzq worker` invocations,
+more worker processes - either yourself (multiple `blitzq worker` invocations,
 e.g. under systemd/k8s replicas) or with `--workers N`, which forks and
 supervises N of them from one command (a prefork-style pool: each child still
 runs `--concurrency` async tasks internally, `SIGTERM`/`SIGINT` to the

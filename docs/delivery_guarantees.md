@@ -96,7 +96,7 @@ exceeds `max_deliveries` (default 5) the message is dead-lettered with reason
   record write, and one shared `PSUBSCRIBE` connection per process (per
   event loop) fans incoming notifications out to whichever local
   `get_result()` calls are waiting, so it wakes up close to immediately
-  rather than on a poll interval — however many tasks are in flight at
+  rather than on a poll interval - however many tasks are in flight at
   once, this costs one Redis connection, not one per waiting call. It
   re-checks the record itself after every wake-up (a missed notification
   just means it waits again), and falls back to a 5 s safety-net poll so a

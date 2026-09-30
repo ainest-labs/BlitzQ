@@ -22,21 +22,21 @@ don't translate directly to Cluster:
   entries from one sorted set into per-queue streams/lists in a single
   server-side transaction. Lua scripts on Redis Cluster can only touch keys
   that hash to the same slot, so the schedule key and every queue it
-  promotes into would need to be co-located — not guaranteed once queue
+  promotes into would need to be co-located - not guaranteed once queue
   names are arbitrary and sharded.
 - Queue keys, the schedule, the dead-letter store and per-task records are
   presently plain keys under one namespace; Cluster requires either hash
   tags to force co-location (constraining key design and rebalancing) or
   moving the atomicity these scripts provide into client-side coordination
   (more round-trips, harder to reason about, more surface for subtle bugs).
-- None of this is impossible — it's a real, multi-week design and
-  implementation project, not a missing flag — and BlitzQ shipped 1.0 with
+- None of this is impossible - it's a real, multi-week design and
+  implementation project, not a missing flag - and BlitzQ shipped 1.0 with
   the smaller, provably-correct single-node design deliberately, rather than
   delay the release for scale most users don't need yet.
 
 **What would make this happen:** a concrete need from someone running Redis
 Cluster at a scale a single primary can't handle. If that's you, open an
-issue with your throughput/dataset numbers — it changes the design tradeoffs
+issue with your throughput/dataset numbers - it changes the design tradeoffs
 above from theoretical to load-bearing.
 
 ## Other known gaps
@@ -55,8 +55,23 @@ visibility; none of these have a design in progress.
 
 ## Already fixed
 
-- ~~`get_result()` polls for completion instead of being notified~~ — fixed:
+- ~~`get_result()` polls for completion instead of being notified~~ - fixed:
   Redis brokers now publish on the task's record channel when its final
   state is written, and `get_result()` waits on that instead of polling
   tightly, with a coarse poll as a safety net. See
   [delivery_guarantees.md](/docs/delivery-guarantees#results-and-task-state).
+- ~~Push notification opened one Redis connection per waiting `get_result()`
+  call~~ - fixed in 1.1.0: Redis brokers now share one `PSUBSCRIBE`
+  connection per process and fan incoming notifications out to local
+  waiters in-process. A stress test with thousands of tasks awaited
+  concurrently, which previously needed a connection pool sized in the
+  thousands and still occasionally failed outright, now runs cleanly on a
+  handful of connections. Also closed a register-vs-publish race that
+  could otherwise delay a result by the full fallback poll interval. See
+  [delivery_guarantees.md](/docs/delivery-guarantees#results-and-task-state).
+- ~~No built-in way to run more than one worker process from a single
+  command~~ - fixed in 1.1.0: `blitzq worker --workers N` forks and
+  supervises N worker processes (a prefork-style pool), the same scaling
+  lever Celery's prefork pool and this report's own "Profile B" numbers
+  use. See
+  [performance_tuning.md](/docs/performance-tuning#scale-out-with-processes).

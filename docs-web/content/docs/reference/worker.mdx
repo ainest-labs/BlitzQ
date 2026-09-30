@@ -101,20 +101,20 @@ with ``blitzq worker module:attribute``.
 
 **Parameters**
 
-- `name` `str` — Default queue for tasks without an explicit queue or routing rule.
-- `redis_url` `str | None` — Redis connection URL (``rediss://`` for TLS). Defaults to the
+- `name` `str` - Default queue for tasks without an explicit queue or routing rule.
+- `redis_url` `str | None` - Redis connection URL (``rediss://`` for TLS). Defaults to the
 ``BLITZQ_REDIS_URL`` environment variable, then ``redis://localhost:6379/0``.
-- `mode` `Literal['fast', 'reliable']` — ``"reliable"`` (default; Redis Streams, at-least-once, crash recovery)
+- `mode` `Literal['fast', 'reliable']` - ``"reliable"`` (default; Redis Streams, at-least-once, crash recovery)
 or ``"fast"`` (Redis lists, at-most-once, lowest overhead).
-- `broker` `Broker | None` — A custom :class:`~blitzq.broker.base.Broker` instead of Redis.
-- `store_results` `bool` — Store final state and return values (can be overridden per task).
-- `result_ttl` `int` — Seconds to keep task records.
-- `track_state` `bool` — Also record ``queued``/``scheduled``/``running``/``retrying``
+- `broker` `Broker | None` - A custom :class:`~blitzq.broker.base.Broker` instead of Redis.
+- `store_results` `bool` - Store final state and return values (can be overridden per task).
+- `result_ttl` `int` - Seconds to keep task records.
+- `track_state` `bool` - Also record ``queued``/``scheduled``/``running``/``retrying``
 transitions. Costs one extra write per transition.
-- `routes` `Routes` — Task-name glob patterns to queue names, or a callable.
-- `visibility_timeout` `float` — Reliable mode: seconds after which an unacknowledged message whose
+- `routes` `Routes` - Task-name glob patterns to queue names, or a callable.
+- `visibility_timeout` `float` - Reliable mode: seconds after which an unacknowledged message whose
 worker stopped renewing its lease is redelivered.
-- `max_deliveries` `int` — Reliable mode: dead-letter a message after this many deliveries
+- `max_deliveries` `int` - Reliable mode: dead-letter a message after this many deliveries
 (protects against messages that crash workers).
 
 ### `__init__(name: str = 'default', redis_url: str | None = None, mode: Literal['fast', 'reliable'] = 'reliable', broker: Broker | None = None, namespace: str = 'blitzq', serializer: Serializer | None = None, store_results: bool = True, result_ttl: int = 24 * 3600, track_state: bool = False, routes: Routes = None, default_retries: int = 0, default_retry_policy: RetryPolicy | None = None, default_timeout: float | None = None, visibility_timeout: float = 60.0, max_deliveries: int = 5, dead_letter_max: int = 100000, revoke_ttl: int = 3600, redis_options: dict[str, Any] | None = None) -> None`
@@ -347,16 +347,16 @@ Consumes and executes tasks for one :class:`~blitzq.Queue` application.
 
 **Parameters**
 
-- `queues` `Sequence[str] | None` — Queue names to consume; defaults to every queue used by registered
+- `queues` `Sequence[str] | None` - Queue names to consume; defaults to every queue used by registered
 tasks plus the default queue.
-- `concurrency` `int` — Maximum tasks executing at once in this process.
-- `queue_concurrency` `dict[str, int] | None` — Optional per-queue caps, e.g. ``\{"images": 8\}``.
-- `batch_size` `int | None` — Maximum messages fetched per round-trip (default: ``min(concurrency, 100)``).
-- `threads` `int | None` — Sizes of the thread and process pools for sync and process tasks.
-- `shutdown_timeout` `float` — Seconds to wait for running tasks on graceful shutdown before cancelling
+- `concurrency` `int` - Maximum tasks executing at once in this process.
+- `queue_concurrency` `dict[str, int] | None` - Optional per-queue caps, e.g. ``\{"images": 8\}``.
+- `batch_size` `int | None` - Maximum messages fetched per round-trip (default: ``min(concurrency, 100)``).
+- `threads` `int | None` - Sizes of the thread and process pools for sync and process tasks.
+- `shutdown_timeout` `float` - Seconds to wait for running tasks on graceful shutdown before cancelling
 them and returning their messages to the queue.
-- `schedule_poll_interval` `float` — Maximum delay between checks for due scheduled tasks (``promote=True``).
-- `warn_cpu_bound` `bool` — Log a warning, once per task name, when a thread-executor task spends
+- `schedule_poll_interval` `float` - Maximum delay between checks for due scheduled tasks (``promote=True``).
+- `warn_cpu_bound` `bool` - Log a warning, once per task name, when a thread-executor task spends
 almost all of a non-trivial wall-clock duration on the CPU rather than
 blocked in I/O - a strong sign it is competing for the GIL and would
 run in true parallel on ``executor="process"`` instead. See

@@ -16,20 +16,20 @@ with ``blitzq worker module:attribute``.
 
 **Parameters**
 
-- `name` `str` — Default queue for tasks without an explicit queue or routing rule.
-- `redis_url` `str | None` — Redis connection URL (``rediss://`` for TLS). Defaults to the
+- `name` `str` - Default queue for tasks without an explicit queue or routing rule.
+- `redis_url` `str | None` - Redis connection URL (``rediss://`` for TLS). Defaults to the
 ``BLITZQ_REDIS_URL`` environment variable, then ``redis://localhost:6379/0``.
-- `mode` `Literal['fast', 'reliable']` — ``"reliable"`` (default; Redis Streams, at-least-once, crash recovery)
+- `mode` `Literal['fast', 'reliable']` - ``"reliable"`` (default; Redis Streams, at-least-once, crash recovery)
 or ``"fast"`` (Redis lists, at-most-once, lowest overhead).
-- `broker` `Broker | None` — A custom :class:`~blitzq.broker.base.Broker` instead of Redis.
-- `store_results` `bool` — Store final state and return values (can be overridden per task).
-- `result_ttl` `int` — Seconds to keep task records.
-- `track_state` `bool` — Also record ``queued``/``scheduled``/``running``/``retrying``
+- `broker` `Broker | None` - A custom :class:`~blitzq.broker.base.Broker` instead of Redis.
+- `store_results` `bool` - Store final state and return values (can be overridden per task).
+- `result_ttl` `int` - Seconds to keep task records.
+- `track_state` `bool` - Also record ``queued``/``scheduled``/``running``/``retrying``
 transitions. Costs one extra write per transition.
-- `routes` `Routes` — Task-name glob patterns to queue names, or a callable.
-- `visibility_timeout` `float` — Reliable mode: seconds after which an unacknowledged message whose
+- `routes` `Routes` - Task-name glob patterns to queue names, or a callable.
+- `visibility_timeout` `float` - Reliable mode: seconds after which an unacknowledged message whose
 worker stopped renewing its lease is redelivered.
-- `max_deliveries` `int` — Reliable mode: dead-letter a message after this many deliveries
+- `max_deliveries` `int` - Reliable mode: dead-letter a message after this many deliveries
 (protects against messages that crash workers).
 
 ### `__init__(name: str = 'default', redis_url: str | None = None, mode: Literal['fast', 'reliable'] = 'reliable', broker: Broker | None = None, namespace: str = 'blitzq', serializer: Serializer | None = None, store_results: bool = True, result_ttl: int = 24 * 3600, track_state: bool = False, routes: Routes = None, default_retries: int = 0, default_retry_policy: RetryPolicy | None = None, default_timeout: float | None = None, visibility_timeout: float = 60.0, max_deliveries: int = 5, dead_letter_max: int = 100000, revoke_ttl: int = 3600, redis_options: dict[str, Any] | None = None) -> None`

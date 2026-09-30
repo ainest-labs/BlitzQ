@@ -66,18 +66,18 @@ def render_docstring(obj) -> str:
             for p in section.value:
                 ann = f" `{p.annotation}`" if p.annotation else ""
                 desc = mdx_escape(p.description or "")
-                out.append(f"- `{p.name}`{ann} — {desc}")
+                out.append(f"- `{p.name}`{ann} - {desc}")
         elif kind == "returns":
             out.append("**Returns**\n")
             for r in section.value:
                 ann = f" `{r.annotation}`" if r.annotation else ""
                 desc = mdx_escape(r.description or "")
                 name = f"`{r.name}` " if r.name else ""
-                out.append(f"- {name}{ann} — {desc}")
+                out.append(f"- {name}{ann} - {desc}")
         elif kind == "raises":
             out.append("**Raises**\n")
             for r in section.value:
-                out.append(f"- `{r.annotation}` — {mdx_escape(r.description or '')}")
+                out.append(f"- `{r.annotation}` - {mdx_escape(r.description or '')}")
         elif kind == "examples":
             out.append("**Examples**\n")
             for ex in section.value:

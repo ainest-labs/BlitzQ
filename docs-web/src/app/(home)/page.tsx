@@ -2,20 +2,21 @@ import Link from 'next/link';
 import { Features } from '@/components/landing/features';
 import { LiveDemo } from '@/components/landing/live-demo';
 import { BenchmarkChart } from '@/components/landing/benchmark-chart';
+import { ConnectionScaling } from '@/components/landing/connection-scaling';
 
 export default function HomePage() {
   return (
     <main className="flex flex-1 flex-col">
       <section className="flex flex-col items-center text-center gap-5 px-4 pt-20 pb-16">
         <span className="rounded-full border border-fd-border px-3 py-1 text-xs font-medium text-fd-muted-foreground">
-          1.0.0 · <code className="text-fd-foreground">pip install blitzq</code>
+          1.1.0 · <code className="text-fd-foreground">pip install blitzq</code>
         </span>
         <h1 className="text-4xl sm:text-5xl font-bold tracking-tight max-w-2xl">
           A fast, async-native task queue for Python
         </h1>
         <p className="text-fd-muted-foreground max-w-xl text-lg">
           BlitzQ runs background jobs on <code>asyncio</code> and Redis, with explicit
-          reliable/fast delivery modes, retries, scheduling and multi-queue routing —
+          reliable/fast delivery modes, retries, scheduling and multi-queue routing -
           framework-agnostic, with FastAPI, Django and Flask helpers.
         </p>
         <div className="flex flex-wrap items-center justify-center gap-3 mt-2">
@@ -62,7 +63,8 @@ result = await queue.get_result(task.id, timeout=10)`}</code>
           <h2 className="text-2xl font-bold mb-2">Race BlitzQ against Celery</h2>
           <p className="text-fd-muted-foreground text-sm">
             Pick a workload and a task count, then watch both clear the queue at their
-            real measured throughput.
+            real measured throughput - including a worker-pool preset using
+            <code className="text-fd-foreground"> --workers N</code>, new in 1.1.0.
           </p>
         </div>
         <LiveDemo />
@@ -72,7 +74,7 @@ result = await queue.get_result(task.id, timeout=10)`}</code>
         <div className="mb-6 text-center">
           <h2 className="text-2xl font-bold mb-2">Benchmarked against Celery and Huey</h2>
           <p className="text-fd-muted-foreground text-sm">
-            Measured, not estimated — 5 repetitions per workload, medians reported.
+            Measured, not estimated - 5 repetitions per workload, medians reported.
             BlitzQ wins most workloads, and the report says so when it doesn&apos;t.
           </p>
         </div>
@@ -80,13 +82,25 @@ result = await queue.get_result(task.id, timeout=10)`}</code>
       </section>
 
       <section className="px-4 pb-24 max-w-3xl mx-auto w-full">
+        <div className="mb-6 text-center">
+          <h2 className="text-2xl font-bold mb-2">Notified, not polled - and now cheap at scale</h2>
+          <p className="text-fd-muted-foreground text-sm">
+            get_result() pushes instead of polling since 1.0.1. As of 1.1.0 it also shares
+            one Redis connection per process instead of one per waiting call. Drag to see
+            what that meant in practice.
+          </p>
+        </div>
+        <ConnectionScaling />
+      </section>
+
+      <section className="px-4 pb-24 max-w-3xl mx-auto w-full">
         <div className="rounded-2xl border border-fd-border bg-fd-card p-6 flex flex-wrap items-center justify-between gap-4">
           <div>
             <h2 className="text-lg font-semibold mb-1">Known gaps, stated plainly</h2>
             <p className="text-fd-muted-foreground text-sm max-w-md">
-              What&apos;s out of scope for 1.0.0, why, and what&apos;s already been fixed —
-              including why <code className="text-fd-foreground">get_result()</code> no longer
-              polls.
+              What&apos;s out of scope, why, and what&apos;s already been fixed -
+              including why <code className="text-fd-foreground">get_result()</code> shares
+              one connection instead of opening one per waiting call.
             </p>
           </div>
           <Link
