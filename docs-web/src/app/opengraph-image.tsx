@@ -112,7 +112,7 @@ export default function Image() {
                 }}
               >
                 Async-native task queue for Python, built on Redis. Reliable
-                and fast delivery modes, benchmarked against Celery.
+                and fast delivery modes, retries, and scheduling built in.
               </span>
             </div>
 
