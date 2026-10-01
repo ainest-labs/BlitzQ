@@ -28,7 +28,11 @@ from typing import Any, ClassVar, Literal
 
 from redis.asyncio import BlockingConnectionPool, Redis
 from redis.asyncio.client import Pipeline
+from redis.asyncio.retry import Retry
+from redis.backoff import ExponentialBackoff
 from redis.commands.core import AsyncScript
+from redis.exceptions import ConnectionError as RedisConnectionError
+from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from . import _lua
 from .base import Broker, Completion, PublishRequest, ScheduledEntry
@@ -214,7 +218,12 @@ class RedisBrokerBase(Broker):
         loop = asyncio.get_running_loop()
         conn = self._conns.get(loop)
         if conn is None:
-            opts: dict[str, Any] = {"socket_keepalive": True, "health_check_interval": 30}
+            opts: dict[str, Any] = {
+                "socket_keepalive": True,
+                "health_check_interval": 30,
+                "retry": Retry(ExponentialBackoff(cap=1, base=0.05), retries=3),
+                "retry_on_error": [RedisConnectionError, RedisTimeoutError],
+            }
             opts.update(self.redis_options)
             opts["decode_responses"] = False
             pool = BlockingConnectionPool.from_url(

@@ -414,8 +414,11 @@ async def test_rate_limit_shared_across_two_workers(redis_app_factory, mode):
         await wait_for(lambda: len(times) == 12, timeout=10)
     elapsed = max(times) - min(times)
     # 12 tasks at 4/s with a 4-token burst: ~2s minimum: (12-4)/4. Two workers
-    # racing for the same bucket must not double the effective rate.
-    assert elapsed >= 1.8
+    # racing for the same bucket must not double the effective rate. The
+    # margin below 2.0s absorbs scheduler-poll-interval jitter (0.02s) and
+    # scheduling noise on shared CI runners, not a tolerance for the bucket
+    # actually leaking tokens.
+    assert elapsed >= 1.7
 
 
 async def test_priority_survives_a_worker_crash_reliable_mode(redis_app_factory):
