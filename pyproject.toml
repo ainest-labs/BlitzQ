@@ -7,7 +7,7 @@ name = "blitzq"
 dynamic = ["version"]
 description = "A high-performance, framework-agnostic asyncio task queue backed by Redis."
 readme = "README.md"
-license = "MIT"
+license = "LicenseRef-PolyForm-Noncommercial-1.0.0"
 license-files = ["LICENSE"]
 requires-python = ">=3.12"
 authors = [{ name = "AiNest Labs" }]

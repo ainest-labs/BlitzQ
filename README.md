@@ -2,7 +2,7 @@
 
 [![tests](https://github.com/ainest-labs/BlitzQ/actions/workflows/tests.yml/badge.svg)](https://github.com/ainest-labs/BlitzQ/actions/workflows/tests.yml)
 [![PyPI](https://img.shields.io/pypi/v/blitzq.svg)](https://pypi.org/project/blitzq/)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License: PolyForm Noncommercial](https://img.shields.io/badge/license-PolyForm%20Noncommercial-blue.svg)](LICENSE)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue)](docs/installation.md#requirements)
 
 A high-performance, framework-agnostic task queue for Python, built on asyncio
@@ -435,7 +435,15 @@ now notification-driven).
 
 ## License
 
-MIT, see [LICENSE](LICENSE).
+As of this version, BlitzQ is licensed under the
+[PolyForm Noncommercial License 1.0.0](LICENSE): free to use, modify, and
+redistribute for personal projects, research, education, and other
+noncommercial purposes. Commercial use (by or for a business or any
+for-profit entity) requires a separate commercial license - contact
+AiNest Labs.
+
+Versions 1.0.0 through 1.1.0 remain available under the MIT License they
+were originally released with; that grant is unaffected by this change.
 
 ---
 
