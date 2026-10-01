@@ -26,12 +26,6 @@ jobs:
         os: [ubuntu-latest]
         python: ["3.12", "3.13"]
         redis-py: ["redis>=6,<7", "redis>=8"]
-    services:
-      redis:
-        image: redis:7.4-alpine
-        ports: ["6379:6379"]
-        options: >-
-          --health-cmd "redis-cli ping" --health-interval 2s --health-timeout 2s --health-retries 20
     env:
       BLITZQ_TEST_REDIS_URL: redis://localhost:6379/15
       BLITZQ_REQUIRE_REDIS: "1"
@@ -40,6 +34,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
+      - name: Start Redis
+        run: |
+          docker run -d --name redis -p 6379:6379 redis:7.4-alpine \
+            redis-server --enable-debug-command yes
+          for i in $(seq 1 20); do
+            docker exec redis redis-cli ping && break
+            sleep 2
+          done
       - run: pip install -e ".[dev]" "${{ matrix.redis-py }}"
       - run: pytest -q
 
