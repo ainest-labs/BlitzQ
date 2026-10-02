@@ -306,3 +306,27 @@ class MemoryBroker(Broker):
         held = self._idem_locks.get(key)
         if held is not None and held[0] == owner:
             del self._idem_locks[key]
+
+    # -- dead-letter bulk access ---------------------------------------------------
+    async def dead_letter_ids(
+        self,
+        *,
+        after: float | None = None,
+        before: float | None = None,
+        oldest_first: bool = False,
+    ) -> list[str]:
+        # Insertion order breaks timestamp ties, so oldest-first is exactly the
+        # reverse of newest-first even when the clock is coarse.
+        items = [
+            (failed_at, seq, task_id)
+            for seq, (task_id, (failed_at, _data)) in enumerate(self._dlq.items())
+            if (after is None or failed_at >= after) and (before is None or failed_at <= before)
+        ]
+        items.sort(reverse=not oldest_first)
+        return [task_id for _, _, task_id in items]
+
+    async def get_dead_letters(self, ids: Sequence[str]) -> list[bytes | None]:
+        return [entry[1] if (entry := self._dlq.get(i)) else None for i in ids]
+
+    async def delete_dead_letters(self, ids: Sequence[str]) -> int:
+        return sum(1 for i in ids if self._dlq.pop(i, None) is not None)

@@ -29,9 +29,59 @@ blitzq queue stats --app myapp.tasks:app          # queue depth, in-progress, sc
 blitzq task inspect <id> --app myapp.tasks:app    # state, attempts, timings, error
 blitzq task cancel <id> --app ...                 # certain for scheduled tasks, best effort otherwise
 blitzq dead-letter list --app ...                 # newest first
-blitzq task retry <id> --app ...                  # replay a dead letter with a fresh attempt budget
-blitzq dead-letter purge --yes --app ...
+blitzq dead-letter summary --by error_type --app ...   # what is failing, grouped
+blitzq task retry <id> --app ...                  # replay one dead letter with a fresh attempt budget
+blitzq dead-letter retry-all --yes --app ...      # replay many (filtered); see below
+blitzq dead-letter purge --yes --app ...          # delete all, or only those matching filters
 blitzq queue purge <queue> --yes --app ...
+```
+
+### Working with many dead letters
+
+`list`, `summary`, `retry-all` and `purge` share the same filters. Every filter
+you give must match:
+
+| Option | Matches |
+|---|---|
+| `--task billing.*` | task name or glob |
+| `--queue emails` | the queue and its priority levels |
+| `--error-type GatewayTimeout` | exception class name |
+| `--error-contains "timed out"` | text in the error message (case-insensitive) |
+| `--reason "max attempts exceeded"` | exact dead-letter reason |
+| `--header country=IN` (repeatable, `-H`) | headers set when the task was enqueued |
+| `--rate-key stripe:IN` | the call's rate key |
+| `--correlation-id ID` | the task's correlation id |
+| `--since 2h` / `--until 30m` | failure time (`30m`, `2h`, `1d`, or an ISO timestamp) |
+
+Selecting by branch, tenant or country works through headers: enqueue with
+`task.options(headers={"country": "IN", "branch": "b12"})` and filter on them.
+
+```bash
+blitzq dead-letter summary --by error_type --since 1d          # what failed, and how often
+blitzq dead-letter summary --by header:country                 # ...or where
+blitzq dead-letter list --task 'billing.*' -H country=IN --error-type GatewayTimeout
+blitzq dead-letter retry-all --task 'billing.*' -H country=IN --dry-run    # preview
+blitzq dead-letter retry-all --task 'billing.*' -H country=IN --rate 50 --yes
+blitzq dead-letter purge --error-type CardDeclined --since 7d --yes
+```
+
+`retry-all` re-enqueues oldest first, each with a fresh attempt budget, and takes
+`--limit N` and `--rate N` (publishes per second, so a large replay does not
+hammer the service that caused the failures). Replaying one entry is atomic, so
+two operators running it at once, or a replay racing a purge, never publish an
+entry twice; an entry someone else already handled is counted as `skipped`.
+Entries whose message can no longer be decoded stay in the store and are reported
+as `undecodable`. Scans work on a snapshot of the matching ids and fetch in chunks
+of 200, so large dead-letter sets are safe to process.
+
+The same operations are available in Python:
+
+```python
+await queue.dead_letters(task="billing.*", headers={"country": "IN"}, limit=50)
+await queue.dead_letter_summary(by="header:country")
+result = await queue.retry_dead_letters(error_type="GatewayTimeout", rate=50)
+print(result.requeued, result.skipped)           # BulkResult
+await queue.purge_dead_letters(error_type="CardDeclined", dry_run=True)
 ```
 
 Instead of `--app` you can pass `--redis-url`, `--mode` and `--namespace`, or set

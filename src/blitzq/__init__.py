@@ -10,6 +10,7 @@ See https://github.com/ainest-labs/BlitzQ for documentation.
 from ._version import __version__
 from .client import Queue
 from .context import TaskContext, current_task
+from .deadletters import BulkResult, DeadLetterFilter
 from .exceptions import (
     BlitzQError,
     ConfigurationError,
@@ -31,8 +32,10 @@ from .worker import Worker
 
 __all__ = [
     "BlitzQError",
+    "BulkResult",
     "ConfigurationError",
     "Cron",
+    "DeadLetterFilter",
     "Every",
     "MessageTooLarge",
     "Priority",

@@ -242,7 +242,11 @@ Delays are `min(max_delay, initial_delay * backoff**(n-1))`, drawn from
 keep processing other tasks. Retries keep the same task id and pass through normal
 queue limits. After the last attempt the task is **dead-lettered**. Inspect and
 replay with `blitzq dead-letter list` and `blitzq task retry ID`, or
-`await queue.retry(id)`.
+`await queue.retry(id)`. For many at once, `blitzq dead-letter summary` shows what is
+failing and `blitzq dead-letter retry-all` replays (or `purge` deletes) everything
+matching filters such as `--task`, `--error-type`, `--header country=IN` and
+`--since 2h`, with `--dry-run` and `--rate`. See
+[docs/operations.md](docs/operations.md#working-with-many-dead-letters).
 
 ## Scheduling
 

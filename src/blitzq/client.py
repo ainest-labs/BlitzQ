@@ -17,6 +17,11 @@ import msgspec
 from ._portal import Portal
 from .broker import Broker, redis_broker
 from .broker.base import PublishRequest, QueueStats
+from .deadletters import BulkResult, DeadLetterFilter
+from .deadletters import collect as _dl_collect
+from .deadletters import purge_matching as _dl_purge
+from .deadletters import retry_matching as _dl_retry
+from .deadletters import summarize as _dl_summarize
 from .exceptions import ConfigurationError, ResultTimeout
 from .idempotency import publish_deduplicated
 from .ratelimit import RateLimit, as_rate_limit
@@ -550,9 +555,89 @@ class Queue:
         return self._portal_call(self._retry, task_id, what="retry_sync()")
 
     # -- dead letters / stats ------------------------------------------------------
-    async def dead_letters(self, limit: int = 100, offset: int = 0) -> list[DeadLetter]:
-        raw = await self.broker.dead_letters(limit, offset)
-        return [self.serializer.decode_dead(r) for r in raw]
+    async def dead_letters(
+        self, limit: int = 100, offset: int = 0, **filters: Any
+    ) -> list[DeadLetter]:
+        """List dead letters, newest first, optionally filtered.
+
+        Filters are the fields of :class:`~blitzq.DeadLetterFilter`, for example
+        ``dead_letters(task="billing.*", error_type="GatewayTimeout",
+        headers={"country": "IN"})``.
+        """
+        if not filters:
+            raw = await self.broker.dead_letters(limit, offset)
+            return [self.serializer.decode_dead(r) for r in raw]
+        return await _dl_collect(
+            self, self.broker, DeadLetterFilter(**filters), limit=limit, offset=offset
+        )
+
+    async def count_dead_letters(self, **filters: Any) -> int:
+        """How many dead letters match the filters (all of them with none)."""
+        if not filters:
+            return await self.broker.dead_letter_count()
+        return len(await _dl_collect(self, self.broker, DeadLetterFilter(**filters)))
+
+    async def _retry_dead_letters(
+        self,
+        broker: Broker,
+        limit: int | None,
+        rate: float | None,
+        dry_run: bool,
+        filters: dict[str, Any],
+    ) -> BulkResult:
+        return await _dl_retry(
+            self, broker, DeadLetterFilter(**filters), limit=limit, rate=rate, dry_run=dry_run
+        )
+
+    async def retry_dead_letters(
+        self,
+        *,
+        limit: int | None = None,
+        rate: float | None = None,
+        dry_run: bool = False,
+        **filters: Any,
+    ) -> BulkResult:
+        """Re-enqueue every matching dead letter, oldest first, with a fresh attempt budget.
+
+        ``rate`` caps publishes per second so a large replay does not hammer the
+        service that caused the failures. ``dry_run`` only reports what would be
+        replayed. Replaying one entry is atomic, so concurrent runs never publish
+        an entry twice. With no filters this replays everything.
+        """
+        return await self._retry_dead_letters(self.broker, limit, rate, dry_run, filters)
+
+    def retry_dead_letters_sync(
+        self,
+        *,
+        limit: int | None = None,
+        rate: float | None = None,
+        dry_run: bool = False,
+        **filters: Any,
+    ) -> BulkResult:
+        return self._portal_call(
+            self._retry_dead_letters,
+            limit,
+            rate,
+            dry_run,
+            filters,
+            what="retry_dead_letters_sync()",
+        )
+
+    async def purge_dead_letters(self, *, dry_run: bool = False, **filters: Any) -> int:
+        """Delete matching dead letters (all of them with no filters).
+
+        Returns how many were deleted, or, with ``dry_run``, would be.
+        """
+        if not filters:
+            if dry_run:
+                return await self.broker.dead_letter_count()
+            return await self.broker.purge_dead_letters()
+        return await _dl_purge(self, self.broker, DeadLetterFilter(**filters), dry_run=dry_run)
+
+    async def dead_letter_summary(self, by: str = "error_type", **filters: Any) -> dict[str, int]:
+        """Count matching dead letters grouped by ``task``, ``queue``, ``reason``,
+        ``error_type``, ``rate_key`` or ``header:<name>``, largest group first."""
+        return await _dl_summarize(self, self.broker, DeadLetterFilter(**filters), by=by)
 
     async def queue_stats(self, queues: Sequence[str] | None = None) -> list[QueueStats]:
         if queues is None:

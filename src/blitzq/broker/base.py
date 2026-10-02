@@ -305,6 +305,25 @@ class Broker(ABC):
         waiting if another caller took it first).
         """
 
+    # -- dead-letter bulk access ---------------------------------------------------
+    async def dead_letter_ids(
+        self,
+        *,
+        after: float | None = None,
+        before: float | None = None,
+        oldest_first: bool = False,
+    ) -> list[str]:
+        """Ids of dead letters failed within ``[after, before]`` (epoch seconds)."""
+        raise NotImplementedError(f"{type(self).__name__} does not support bulk dead letters")
+
+    async def get_dead_letters(self, ids: Sequence[str]) -> list[bytes | None]:
+        """Encoded dead letters for ``ids``, ``None`` for any that no longer exist."""
+        raise NotImplementedError(f"{type(self).__name__} does not support bulk dead letters")
+
+    async def delete_dead_letters(self, ids: Sequence[str]) -> int:
+        """Delete these dead letters; returns how many existed."""
+        raise NotImplementedError(f"{type(self).__name__} does not support bulk dead letters")
+
     # -- idempotency -----------------------------------------------------------------
     async def idem_claim(self, key: str, task_id: str, ttl: int) -> str | None:
         """Claim ``key`` for ``task_id`` for ``ttl`` seconds.

@@ -7,6 +7,7 @@ import importlib
 import json
 import multiprocessing
 import os
+import re
 import signal
 import sys
 import time
@@ -19,6 +20,7 @@ import typer
 
 from ._version import __version__
 from .client import Queue
+from .exceptions import ConfigurationError
 from .logs import configure_logging
 
 T = TypeVar("T")
@@ -510,26 +512,124 @@ def task_cancel(
 
 
 # -- dead letters -------------------------------------------------------------------
+_REL_UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+_REL_RE = re.compile(r"^(\d+(?:\.\d+)?)([smhd])$")
+
+FTask = Annotated[str | None, typer.Option("--task", help="Task name or glob, e.g. 'billing.*'.")]
+FQueue = Annotated[
+    str | None, typer.Option("--queue", help="Only this queue (and its priority levels).")
+]
+FReason = Annotated[str | None, typer.Option("--reason", help="Exact dead-letter reason.")]
+FErrorType = Annotated[
+    str | None, typer.Option("--error-type", help="Exception class name, e.g. GatewayTimeout.")
+]
+FContains = Annotated[
+    str | None,
+    typer.Option("--error-contains", help="Case-insensitive text in the error message."),
+]
+FHeader = Annotated[
+    list[str] | None,
+    typer.Option(
+        "--header",
+        "-H",
+        help="KEY=VALUE from the original message headers, e.g. country=IN. "
+        "Repeat to require several.",
+    ),
+]
+FRateKey = Annotated[str | None, typer.Option("--rate-key", help="Exact rate key.")]
+FCorrelation = Annotated[str | None, typer.Option("--correlation-id")]
+FSince = Annotated[
+    str | None,
+    typer.Option("--since", help="Failed since: 30m, 2h, 1d, or an ISO timestamp (UTC if naive)."),
+]
+FUntil = Annotated[str | None, typer.Option("--until", help="Failed until (same formats).")]
+DryOpt = Annotated[bool, typer.Option("--dry-run", help="Only report what would happen.")]
+
+
+def _parse_when(value: str | None, flag: str) -> float | None:
+    if value is None:
+        return None
+    m = _REL_RE.match(value.strip())
+    if m:
+        return time.time() - float(m.group(1)) * _REL_UNITS[m.group(2)]
+    try:
+        parsed = datetime.fromisoformat(value.strip())
+    except ValueError as exc:
+        raise typer.BadParameter(
+            f"{flag}: expected 30m, 2h, 1d or an ISO timestamp, got {value!r}"
+        ) from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.timestamp()
+
+
+def _filters(
+    task: str | None,
+    queue: str | None,
+    reason: str | None,
+    error_type: str | None,
+    contains: str | None,
+    header: list[str] | None,
+    rate_key: str | None,
+    correlation_id: str | None,
+    since: str | None,
+    until: str | None,
+) -> dict[str, Any]:
+    headers: dict[str, str] = {}
+    for item in header or []:
+        key, sep, val = item.partition("=")
+        if not sep or not key:
+            raise typer.BadParameter(f"--header expects KEY=VALUE, got {item!r}")
+        headers[key] = val
+    candidates: dict[str, Any] = {
+        "task": task,
+        "queue": queue,
+        "reason": reason,
+        "error_type": error_type,
+        "error_contains": contains,
+        "headers": headers or None,
+        "rate_key": rate_key,
+        "correlation_id": correlation_id,
+        "failed_after": _parse_when(since, "--since"),
+        "failed_before": _parse_when(until, "--until"),
+    }
+    return {k: v for k, v in candidates.items() if v is not None}
+
+
 @dlq_app.command("list")
 def dlq_list(
     limit: Annotated[int, typer.Option(min=1)] = 50,
     offset: Annotated[int, typer.Option(min=0)] = 0,
-    queue: Annotated[str | None, typer.Option(help="Only this queue.")] = None,
+    queue: FQueue = None,
+    task: FTask = None,
+    reason: FReason = None,
+    error_type: FErrorType = None,
+    error_contains: FContains = None,
+    header: FHeader = None,
+    rate_key: FRateKey = None,
+    correlation_id: FCorrelation = None,
+    since: FSince = None,
+    until: FUntil = None,
     app_path: AppOpt = None,
     redis_url: UrlOpt = None,
     mode: ModeOpt = "reliable",
     namespace: NsOpt = "blitzq",
     as_json: JsonOpt = False,
 ) -> None:
-    """List dead-lettered tasks, newest first."""
+    """List dead-lettered tasks, newest first, optionally filtered."""
     q = _client(app_path, redis_url, mode, namespace)
+    filters = _filters(
+        task, queue, reason, error_type, error_contains, header, rate_key, correlation_id,
+        since, until,
+    )  # fmt: skip
 
     async def go() -> tuple[int, list[Any]]:
-        return await q.broker.dead_letter_count(), await q.dead_letters(limit, offset)
+        if not filters:
+            return await q.broker.dead_letter_count(), await q.dead_letters(limit, offset)
+        matches = await q.dead_letters(sys.maxsize, 0, **filters)
+        return len(matches), matches[offset : offset + limit]
 
     total, items = _run(q, go)
-    if queue:
-        items = [d for d in items if d.queue == queue]
     if as_json:
         rows = []
         for d in items:
@@ -538,7 +638,7 @@ def dlq_list(
             rows.append(row)
         typer.echo(json.dumps({"total": total, "items": rows}, indent=2, default=str))
         return
-    typer.echo(f"{total} dead-lettered task(s)")
+    typer.echo(f"{total} dead-lettered task(s)" + (" matching" if filters else ""))
     for d in items:
         err = f"{d.error.type}: {d.error.message}" if d.error else "-"
         typer.echo(
@@ -547,21 +647,137 @@ def dlq_list(
         )
 
 
+@dlq_app.command("summary")
+def dlq_summary(
+    by: Annotated[
+        str,
+        typer.Option(
+            "--by",
+            help="Group by task, queue, reason, error_type, rate_key or header:<name> "
+            "(e.g. header:country).",
+        ),
+    ] = "error_type",
+    queue: FQueue = None,
+    task: FTask = None,
+    reason: FReason = None,
+    error_type: FErrorType = None,
+    error_contains: FContains = None,
+    header: FHeader = None,
+    rate_key: FRateKey = None,
+    correlation_id: FCorrelation = None,
+    since: FSince = None,
+    until: FUntil = None,
+    app_path: AppOpt = None,
+    redis_url: UrlOpt = None,
+    mode: ModeOpt = "reliable",
+    namespace: NsOpt = "blitzq",
+    as_json: JsonOpt = False,
+) -> None:
+    """Count dead-lettered tasks grouped by a field, largest group first."""
+    q = _client(app_path, redis_url, mode, namespace)
+    filters = _filters(
+        task, queue, reason, error_type, error_contains, header, rate_key, correlation_id,
+        since, until,
+    )  # fmt: skip
+    try:
+        counts = _run(q, lambda: q.dead_letter_summary(by, **filters))
+    except ConfigurationError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    if as_json:
+        typer.echo(
+            json.dumps({"by": by, "total": sum(counts.values()), "groups": counts}, indent=2)
+        )
+        return
+    typer.echo(f"{sum(counts.values())} dead-lettered task(s) by {by}")
+    for key, n in counts.items():
+        typer.echo(f"{n:>8}  {key}")
+
+
+@dlq_app.command("retry-all")
+def dlq_retry_all(
+    limit: Annotated[
+        int | None,
+        typer.Option("--limit", min=1, help="Re-enqueue at most this many (oldest first)."),
+    ] = None,
+    rate: Annotated[
+        float | None,
+        typer.Option("--rate", min=0.001, help="At most this many per second."),
+    ] = None,
+    dry_run: DryOpt = False,
+    yes: Annotated[bool, typer.Option("--yes", help="Confirm the requeue.")] = False,
+    queue: FQueue = None,
+    task: FTask = None,
+    reason: FReason = None,
+    error_type: FErrorType = None,
+    error_contains: FContains = None,
+    header: FHeader = None,
+    rate_key: FRateKey = None,
+    correlation_id: FCorrelation = None,
+    since: FSince = None,
+    until: FUntil = None,
+    app_path: AppOpt = None,
+    redis_url: UrlOpt = None,
+    mode: ModeOpt = "reliable",
+    namespace: NsOpt = "blitzq",
+    as_json: JsonOpt = False,
+) -> None:
+    """Re-enqueue every matching dead-lettered task, with a fresh attempt budget.
+
+    With no filters this replays all of them. Use --dry-run to preview, then --yes.
+    """
+    if not dry_run and not yes:
+        typer.echo("refusing to requeue without --yes (use --dry-run to preview)", err=True)
+        raise typer.Exit(2)
+    q = _client(app_path, redis_url, mode, namespace)
+    filters = _filters(
+        task, queue, reason, error_type, error_contains, header, rate_key, correlation_id,
+        since, until,
+    )  # fmt: skip
+    result = _run(
+        q, lambda: q.retry_dead_letters(limit=limit, rate=rate, dry_run=dry_run, **filters)
+    )
+    if as_json:
+        typer.echo(json.dumps(_to_builtins(result), indent=2, default=str))
+        return
+    if dry_run:
+        typer.echo(f"would re-enqueue {result.matched} dead-lettered task(s)")
+        return
+    typer.echo(
+        f"re-enqueued {result.requeued} of {result.matched} matching "
+        f"(already gone: {result.skipped}, undecodable: {result.unreplayable})"
+    )
+
+
 @dlq_app.command("purge")
 def dlq_purge(
     yes: Annotated[bool, typer.Option("--yes")] = False,
+    dry_run: DryOpt = False,
+    queue: FQueue = None,
+    task: FTask = None,
+    reason: FReason = None,
+    error_type: FErrorType = None,
+    error_contains: FContains = None,
+    header: FHeader = None,
+    rate_key: FRateKey = None,
+    correlation_id: FCorrelation = None,
+    since: FSince = None,
+    until: FUntil = None,
     app_path: AppOpt = None,
     redis_url: UrlOpt = None,
     mode: ModeOpt = "reliable",
     namespace: NsOpt = "blitzq",
 ) -> None:
-    """Delete all dead letters."""
-    if not yes:
-        typer.echo("refusing to purge without --yes", err=True)
+    """Delete dead letters: all of them, or only those matching the filters."""
+    if not yes and not dry_run:
+        typer.echo("refusing to purge without --yes (use --dry-run to preview)", err=True)
         raise typer.Exit(2)
     q = _client(app_path, redis_url, mode, namespace)
-    n = _run(q, q.broker.purge_dead_letters)
-    typer.echo(f"deleted {n} dead letters")
+    filters = _filters(
+        task, queue, reason, error_type, error_contains, header, rate_key, correlation_id,
+        since, until,
+    )  # fmt: skip
+    n = _run(q, lambda: q.purge_dead_letters(dry_run=dry_run, **filters))
+    typer.echo(f"would delete {n} dead letters" if dry_run else f"deleted {n} dead letters")
 
 
 # -- benchmarks ---------------------------------------------------------------------

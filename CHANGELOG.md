@@ -26,6 +26,19 @@ All notable changes to this project are documented here. The project follows
   `rate_limit` per key; any task using a key shares its bucket. See
   [docs/architecture.md](docs/architecture.md#named-buckets-rate_key).
 
+- **Dead-letter filtering and bulk operations.** `blitzq dead-letter list`
+  takes filters (`--task` with globs, `--queue`, `--error-type`,
+  `--error-contains`, `--reason`, `--header KEY=VALUE`, `--rate-key`,
+  `--correlation-id`, `--since`/`--until`) and reports the filtered total. New
+  `blitzq dead-letter summary --by ...` groups failures, and
+  `blitzq dead-letter retry-all` replays everything matching, oldest first, with
+  `--limit`, `--rate` and `--dry-run`. `blitzq dead-letter purge` takes the same
+  filters. Python: `queue.dead_letters(**filters)`, `count_dead_letters`,
+  `retry_dead_letters` (returns a `BulkResult`), `purge_dead_letters`,
+  `dead_letter_summary`, and the public `DeadLetterFilter`. Replays are atomic
+  per entry, so concurrent runs never publish an entry twice. See
+  [docs/operations.md](docs/operations.md#working-with-many-dead-letters).
+
 ### Changed
 
 - The Redis connection pool now retries transient connection errors with

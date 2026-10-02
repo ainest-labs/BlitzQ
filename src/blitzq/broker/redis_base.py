@@ -463,6 +463,37 @@ class RedisBrokerBase(Broker):
             n, _ = await pipe.execute()
         return int(n)
 
+    async def dead_letter_ids(
+        self,
+        *,
+        after: float | None = None,
+        before: float | None = None,
+        oldest_first: bool = False,
+    ) -> list[str]:
+        lo = "-inf" if after is None else after
+        hi = "+inf" if before is None else before
+        r = self._r()
+        if oldest_first:
+            ids = await r.zrangebyscore(self.k_dlq_idx, lo, hi)
+        else:
+            ids = await r.zrevrangebyscore(self.k_dlq_idx, hi, lo)
+        return [bytes(i).decode() for i in ids]
+
+    async def get_dead_letters(self, ids: Sequence[str]) -> list[bytes | None]:
+        if not ids:
+            return []
+        out: list[bytes | None] = await self._r().hmget(self.k_dlq, list(ids))
+        return out
+
+    async def delete_dead_letters(self, ids: Sequence[str]) -> int:
+        if not ids:
+            return 0
+        async with self._r().pipeline(transaction=True) as pipe:
+            pipe.hdel(self.k_dlq, *ids)
+            pipe.zrem(self.k_dlq_idx, *ids)
+            deleted, _ = await pipe.execute()
+        return int(deleted)
+
     # -- periodic ------------------------------------------------------------------
     async def claim_periodic(
         self, name: str, occurrence: float, queue: str, data: bytes | None
