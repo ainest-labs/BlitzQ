@@ -3,11 +3,13 @@
 import asyncio
 import itertools
 
+import msgspec
 import pytest
 
 from blitzq import ConfigurationError, Queue, RateLimit, current_task
 from blitzq.broker import MemoryBroker
 from blitzq.ratelimit import as_rate_limit
+from blitzq.serialization import Envelope
 from conftest import running, wait_for
 
 
@@ -125,3 +127,79 @@ def test_invalid_rate_limit_rejected_at_registration():
     app = Queue(broker=MemoryBroker())
     with pytest.raises(ConfigurationError):
         app.task(rate_limit="not-a-rate")(lambda: None)
+
+
+async def test_rate_key_budgets_are_independent(memory_app: Queue):
+    memory_app.rate_limits["slow"] = RateLimit.parse("1/s")
+    memory_app.rate_limits["free"] = RateLimit.parse("1000/s")
+    done: list[str] = []
+
+    @memory_app.task
+    async def charge(tag):
+        done.append(tag)
+
+    await charge.options(rate_key="slow").enqueue_many((("slow",)) for _ in range(5))
+    await charge.options(rate_key="free").enqueue_many((("free",)) for _ in range(30))
+    async with running(memory_app, concurrency=10, schedule_poll_interval=0.02):
+        await wait_for(lambda: done.count("free") == 30, timeout=5)
+        # The throttled key's backlog did not hold back the unthrottled one.
+        assert done.count("slow") <= 2
+
+
+async def test_rate_key_bucket_is_shared_across_tasks(memory_app: Queue):
+    memory_app.rate_limits["gateway"] = RateLimit.parse("1/s")
+    done: list[str] = []
+
+    @memory_app.task
+    async def charge():
+        done.append("charge")
+
+    @memory_app.task
+    async def refund():
+        done.append("refund")
+
+    await charge.options(rate_key="gateway").enqueue_many(() for _ in range(3))
+    await refund.options(rate_key="gateway").enqueue_many(() for _ in range(3))
+    async with running(memory_app, concurrency=10, schedule_poll_interval=0.02):
+        await asyncio.sleep(0.3)
+        assert len(done) <= 1  # one shared token, not one per task
+
+
+async def test_rate_key_callable_derives_key_from_arguments(memory_app: Queue):
+    memory_app.rate_limits["IN"] = RateLimit.parse("1/s")
+    done: list[str] = []
+
+    @memory_app.task(rate_key=lambda country, **_: country)
+    async def bill(country):
+        done.append(country)
+
+    await bill.enqueue_many(("IN",) for _ in range(4))
+    await bill.enqueue_many(("US",) for _ in range(4))
+    async with running(memory_app, concurrency=10, schedule_poll_interval=0.02):
+        await wait_for(lambda: done.count("US") == 4, timeout=5)
+        assert done.count("IN") <= 2  # only IN has a budget; US has none
+
+
+async def test_rate_key_falls_back_to_task_rate_limit_per_key(memory_app: Queue):
+    done: list[str] = []
+
+    @memory_app.task(rate_limit="1/s")
+    async def job(tag):
+        done.append(tag)
+
+    await job.options(rate_key="IN").enqueue("IN")
+    await job.options(rate_key="US").enqueue("US")
+    async with running(memory_app, concurrency=10, schedule_poll_interval=0.02):
+        # Each key gets its own 1/s bucket, so neither waits on the other.
+        await wait_for(lambda: len(done) == 2, timeout=1)
+
+
+def test_envelope_without_rate_key_still_decodes():
+    old_wire = ["id1", "t", "q", [], {}, 1, 1.0, 1.0, None, None, None]
+    env = msgspec.convert(old_wire, type=Envelope)
+    assert env.rate_key is None
+
+
+def test_invalid_queue_rate_limit_rejected():
+    with pytest.raises(ConfigurationError):
+        Queue(broker=MemoryBroker(), rate_limits={"x": "not-a-rate"})

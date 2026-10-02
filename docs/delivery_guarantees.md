@@ -35,10 +35,79 @@ when it exits. Use it only for tests, notebooks and scripts.
 - A connection dropped after a publish reached Redis but before the reply
   arrived, and the caller retried the enqueue.
 
-**Tasks with external side effects must be idempotent.** For example, use the task
-id (`current_task().id`), which stays the same across retries and redeliveries, as
-an idempotency key towards payment providers, or record completion in your
+**Tasks with external side effects must be idempotent.** BlitzQ gives you the
+tools for that, see [Idempotency keys](#idempotency-keys) below, and you can also
+use the task id (`current_task().id`), which stays the same across retries and
+redeliveries, as a key towards payment providers, or record completion in your
 database under a unique constraint.
+
+## Idempotency keys
+
+An idempotency key names one *logical job*, so it takes effect once however many
+times it is enqueued or delivered:
+
+```python
+queue = Queue(idempotency_ttl=24 * 3600)            # how long a key is remembered
+
+@queue.task(idempotency_key=lambda order: f"charge:{order['id']}")
+async def charge(order):
+    # forward the key to systems that accept their own idempotency key
+    await gateway.charge(order, idempotency_key=current_task().idempotency_key)
+
+await charge.enqueue(order)                         # derived from the arguments
+await charge.options(idempotency_key="inv-9").enqueue(order)   # or set per call
+```
+
+Two things use the key, both through the broker, so they work across every
+producer and worker process:
+
+1. **At enqueue.** The key is claimed atomically before the message is published.
+   A second enqueue with the same key (a retried HTTP request, a double click, a
+   producer that restarted) publishes nothing and returns a handle to the first
+   task, so `handle.result()` works for both callers. This also applies inside one
+   `enqueue_many` batch.
+2. **At execution.** Before the task body runs, the worker takes a leased lock for
+   the key:
+   - If the job already **succeeded**, the body is skipped and the recorded result
+     is returned. This covers a redelivery after the result was recorded but before
+     the ack, and a duplicate that reached a worker because its claim had expired.
+   - If another execution is **still running**, the delivery is rescheduled
+     (about a second later) instead of running concurrently. This covers a lost
+     lease with the first worker still running, and two workers racing.
+   - If the previous owner **crashed**, its lock lapses after the lease
+     (`visibility_timeout`, renewed while the task runs) and the key can run again.
+
+Behaviour worth knowing:
+
+- Keys are **scoped to the task**: `charge` and `notify` can both use `order-1`
+  without colliding. The key you pass is what `current_task().idempotency_key`
+  returns. Keys are non-empty strings up to 512 characters.
+- A **failed attempt releases the lock**, so retries run normally. A job that ends
+  without succeeding (dead-lettered, or cancelled) **releases the key**, so you can
+  submit it again. A job that **succeeded** keeps its key for `idempotency_ttl`
+  (counted again from completion); it is never released early.
+- The first recorded result wins, so every later duplicate sees one consistent
+  answer. The result is stored with the key only when the task stores results
+  (`store_result`); otherwise duplicates are acknowledged with no result.
+- Cost: nothing for tasks without a key. With a key, one atomic Redis call at
+  enqueue, and two at execution (gate and record), plus a lock renewal every
+  `visibility_timeout / 3` while the task runs. Each key is a small hash and a
+  lock in Redis, so use bounded, meaningful ids rather than random values.
+- Works in both modes. In fast mode (at-most-once) a lost message is still lost,
+  but a key can never cause a duplicate effect.
+
+What this **cannot** do: if a worker performs the side effect and then crashes
+*before* the result is recorded, the next owner runs the body again. No queue can
+close that window, because the effect and the record live in different systems.
+Close it by passing the key to the system that holds the effect, which is why
+`current_task().idempotency_key` exists (payment providers, email and SMS APIs and
+most cloud APIs accept an idempotency key), or by writing your effect and your own
+completion marker in one database transaction.
+
+A task that **times out on the thread or process executor** cannot be killed (see
+[Timeouts and hung tasks](operations.md#timeouts-and-hung-tasks)), so its side
+effect may still happen after its lock is released and the retry has started. The
+same remedy applies.
 
 ### When can a task be lost?
 

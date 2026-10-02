@@ -46,6 +46,11 @@ _SCRIPTS = (
     "PERIODIC_CLAIM",
     "HEARTBEAT",
     "RATE_LIMIT",
+    "IDEM_CLAIM",
+    "IDEM_UNCLAIM",
+    "IDEM_BEGIN",
+    "IDEM_RENEW",
+    "IDEM_FINISH",
 )
 
 
@@ -192,6 +197,8 @@ class RedisBrokerBase(Broker):
         self.k_queues = f"{p}queues"
         self.k_workers = f"{p}workers"
         self.k_rate = f"{p}rl:"
+        self.k_idem = f"{p}idem:"
+        self.k_idem_lock = f"{p}idemlk:"
         # One client (connection pool) per event loop: redis-py async
         # connections belong to the loop that created them, and one Queue may
         # be used from several loops at once (a web loop, a worker thread, the
@@ -518,6 +525,45 @@ class RedisBrokerBase(Broker):
             keys=[f"{self.k_rate}{key}"], args=[now, rate, capacity]
         )
         return 0.0 if int(allowed) else float(wait)
+
+    # -- idempotency ---------------------------------------------------------------
+    async def idem_claim(self, key: str, task_id: str, ttl: int) -> str | None:
+        self._r()
+        prior = await self._script("IDEM_CLAIM")(keys=[f"{self.k_idem}{key}"], args=[task_id, ttl])
+        return None if prior is None else bytes(prior).decode()
+
+    async def idem_unclaim(self, key: str, task_id: str) -> None:
+        self._r()
+        await self._script("IDEM_UNCLAIM")(keys=[f"{self.k_idem}{key}"], args=[task_id])
+
+    async def idem_begin(self, key: str, owner: str, lease: float) -> tuple[str, Any]:
+        self._r()
+        state, payload = await self._script("IDEM_BEGIN")(
+            keys=[f"{self.k_idem}{key}", f"{self.k_idem_lock}{key}"],
+            args=[owner, max(1, int(lease * 1000))],
+        )
+        name = bytes(state).decode()
+        if name == "busy":
+            return name, max(0.0, int(payload) / 1000)
+        if name == "done":
+            return name, bytes(payload)
+        return name, None
+
+    async def idem_renew(self, key: str, owner: str, lease: float) -> bool:
+        self._r()
+        ok = await self._script("IDEM_RENEW")(
+            keys=[f"{self.k_idem_lock}{key}"], args=[owner, max(1, int(lease * 1000))]
+        )
+        return bool(int(ok))
+
+    async def idem_finish(
+        self, key: str, owner: str, task_id: str, success: bool, result: bytes, ttl: int
+    ) -> None:
+        self._r()
+        await self._script("IDEM_FINISH")(
+            keys=[f"{self.k_idem}{key}", f"{self.k_idem_lock}{key}"],
+            args=[owner, 1 if success else 0, task_id, result, ttl],
+        )
 
     async def _remember_queues(self, queues: Sequence[str]) -> None:
         if queues:

@@ -196,7 +196,30 @@ shared across every worker process - `"10/s"` means 10/s total, not per
 worker. A task over its limit is not executed and not counted as a retry or a
 failure; it's rescheduled for when a slot should be free, so a rate-limited
 backlog shows up as queue depth, not as a worker sleeping.
+
+Need separate budgets per gateway, country or tenant? Tag calls with a
+`rate_key` (`charge.options(rate_key="stripe:IN").enqueue(...)`) and set the
+budgets in `Queue(rate_limits={"stripe:IN": "10/s"})`. Keys get independent
+buckets, so one throttled key never delays another.
 [docs/architecture.md#rate-limiting](docs/architecture.md#rate-limiting).
+
+### Idempotency
+
+```python
+@queue.task(idempotency_key=lambda order: f"charge:{order['id']}")
+async def charge(order):
+    await gateway.charge(order, idempotency_key=current_task().idempotency_key)
+```
+
+A key names one logical job, so it takes effect once. Enqueueing it again drops
+the duplicate and hands back the first task's handle. At execution, a leased
+lock keeps two workers from running the same key, a finished job's result is
+replayed to duplicates instead of re-running the body, and a crashed worker's
+lock expires on its own. Failed attempts retry normally, and a job that ended
+without succeeding can be submitted again. What it can't cover (a crash between
+a side effect and its record) is why the key is also exposed to your task, to
+forward to payment and email APIs.
+[docs/delivery_guarantees.md#idempotency-keys](docs/delivery_guarantees.md#idempotency-keys).
 
 ## Retries
 

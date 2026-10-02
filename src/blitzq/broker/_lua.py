@@ -165,3 +165,68 @@ redis.call('HSET', KEYS[1], 'tokens', tokens, 'ts', now)
 redis.call('EXPIRE', KEYS[1], math.ceil(capacity / rate) + 1)
 return {allowed, tostring(wait)}
 """
+
+# Idempotency. One hash per key ({task, state, result}) plus a separate
+# execution lock with a lease, so a crashed owner's lock expires by itself.
+#
+# Enqueue-time claim. Returns the task id already holding the key, or nil if
+# this call took it (and may publish).
+# KEYS: hash   ARGV: task_id, ttl_seconds
+IDEM_CLAIM = """
+local cur = redis.call('HGET', KEYS[1], 'task')
+if cur then return cur end
+redis.call('HSET', KEYS[1], 'task', ARGV[1], 'state', 'queued')
+redis.call('EXPIRE', KEYS[1], ARGV[2])
+return false
+"""
+
+# Give the key back (publish failed, or the job ended without succeeding) so a
+# later enqueue with the same key can run. A completed key is never released.
+# KEYS: hash   ARGV: task_id
+IDEM_UNCLAIM = """
+if redis.call('HGET', KEYS[1], 'state') == 'done' then return 0 end
+if redis.call('HGET', KEYS[1], 'task') ~= ARGV[1] then return 0 end
+redis.call('DEL', KEYS[1])
+return 1
+"""
+
+# Execution gate, run just before the task body.
+# Returns {'done', result} if the effect already happened, {'busy', pttl_ms}
+# if another live execution holds the key, or {'run', 0} after taking the lock.
+# KEYS: hash, lock   ARGV: owner, lease_ms
+IDEM_BEGIN = """
+if redis.call('HGET', KEYS[1], 'state') == 'done' then
+  return {'done', redis.call('HGET', KEYS[1], 'result') or ''}
+end
+local holder = redis.call('GET', KEYS[2])
+if holder and holder ~= ARGV[1] then
+  return {'busy', redis.call('PTTL', KEYS[2])}
+end
+redis.call('SET', KEYS[2], ARGV[1], 'PX', ARGV[2])
+return {'run', 0}
+"""
+
+# Extend the lock while the task is still running; 0 means it was lost.
+# KEYS: lock   ARGV: owner, lease_ms
+IDEM_RENEW = """
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+  redis.call('PEXPIRE', KEYS[1], ARGV[2])
+  return 1
+end
+return 0
+"""
+
+# Record the outcome and drop our lock. A success is recorded even if the lock
+# was lost meanwhile (the effect happened), but the first recorded result wins
+# so every later duplicate sees one consistent answer.
+# KEYS: hash, lock   ARGV: owner, success (0/1), task_id, result, ttl_seconds
+IDEM_FINISH = """
+if ARGV[2] == '1' and redis.call('HGET', KEYS[1], 'state') ~= 'done' then
+  redis.call('HSET', KEYS[1], 'task', ARGV[3], 'state', 'done', 'result', ARGV[4])
+  redis.call('EXPIRE', KEYS[1], ARGV[5])
+end
+if redis.call('GET', KEYS[2]) == ARGV[1] then
+  redis.call('DEL', KEYS[2])
+end
+return 1
+"""

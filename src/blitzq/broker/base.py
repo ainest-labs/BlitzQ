@@ -55,6 +55,9 @@ class PublishRequest:
     #: Optional encoded task record written together with the message.
     record: bytes | None = None
     record_ttl: int | None = None
+    #: Idempotency key claimed (by ``publish_deduplicated``) before publishing.
+    idem_key: str | None = None
+    idem_ttl: int = 0
 
 
 @dataclass(slots=True)
@@ -301,3 +304,32 @@ class Broker(ABC):
         *not* reserved for that wait; a task may need to check again after
         waiting if another caller took it first).
         """
+
+    # -- idempotency -----------------------------------------------------------------
+    async def idem_claim(self, key: str, task_id: str, ttl: int) -> str | None:
+        """Claim ``key`` for ``task_id`` for ``ttl`` seconds.
+
+        Returns ``None`` if the claim was taken, or the id of the task that
+        already holds the key.
+        """
+        raise NotImplementedError(f"{type(self).__name__} does not support idempotency keys")
+
+    async def idem_unclaim(self, key: str, task_id: str) -> None:
+        """Release an unfinished claim by ``task_id`` (never a completed one)."""
+        raise NotImplementedError(f"{type(self).__name__} does not support idempotency keys")
+
+    async def idem_begin(self, key: str, owner: str, lease: float) -> tuple[str, Any]:
+        """Gate an execution: ``("run", None)`` after taking the lock,
+        ``("done", result_bytes)`` if the effect already happened, or
+        ``("busy", seconds_left)`` if another live execution holds it."""
+        raise NotImplementedError(f"{type(self).__name__} does not support idempotency keys")
+
+    async def idem_renew(self, key: str, owner: str, lease: float) -> bool:
+        """Extend ``owner``'s lock; ``False`` if it was lost."""
+        raise NotImplementedError(f"{type(self).__name__} does not support idempotency keys")
+
+    async def idem_finish(
+        self, key: str, owner: str, task_id: str, success: bool, result: bytes, ttl: int
+    ) -> None:
+        """Release ``owner``'s lock and, on success, record the result for ``ttl`` seconds."""
+        raise NotImplementedError(f"{type(self).__name__} does not support idempotency keys")

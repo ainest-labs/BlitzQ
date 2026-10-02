@@ -7,7 +7,7 @@ import atexit
 import os
 import time
 import weakref
-from collections.abc import Awaitable, Callable, Coroutine, Sequence
+from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Any, Literal, ParamSpec, Protocol, TypeVar, overload
@@ -18,6 +18,7 @@ from ._portal import Portal
 from .broker import Broker, redis_broker
 from .broker.base import PublishRequest, QueueStats
 from .exceptions import ConfigurationError, ResultTimeout
+from .idempotency import publish_deduplicated
 from .ratelimit import RateLimit, as_rate_limit
 from .results import TaskHandle, unwrap_result
 from .retries import DEFAULT_RETRY_POLICY, RetryPolicy
@@ -91,6 +92,15 @@ class Queue:
     max_deliveries:
         Reliable mode: dead-letter a message after this many deliveries
         (protects against messages that crash workers).
+    rate_limits:
+        Named rate-limit budgets, for example ``{"stripe:IN": "10/s"}``. A
+        call tagged with ``rate_key="stripe:IN"`` draws from that bucket,
+        shared across every worker and every task using the key.
+    idempotency_ttl:
+        Seconds an idempotency key is remembered: a duplicate enqueue within
+        this window is dropped, and a finished job's result is replayed to
+        duplicates that reach a worker. Counted from the claim, and again from
+        completion.
     """
 
     def __init__(
@@ -114,8 +124,18 @@ class Queue:
         dead_letter_max: int = 100_000,
         revoke_ttl: int = 3600,
         redis_options: dict[str, Any] | None = None,
+        rate_limits: Mapping[str, RateLimit | str] | None = None,
+        idempotency_ttl: int = 24 * 3600,
     ) -> None:
         self.name = name
+        if idempotency_ttl <= 0:
+            raise ConfigurationError("idempotency_ttl must be positive")
+        self.idempotency_ttl = idempotency_ttl
+        self.rate_limits: dict[str, RateLimit] = {}
+        for key, spec in (rate_limits or {}).items():
+            limit = as_rate_limit(spec)
+            assert limit is not None
+            self.rate_limits[key] = limit
         self.mode = mode
         if broker is None:
             url = redis_url or os.environ.get("BLITZQ_REDIS_URL") or DEFAULT_REDIS_URL
@@ -177,6 +197,8 @@ class Queue:
         dead_letter: bool = True,
         priority: Priority = "normal",
         rate_limit: RateLimit | str | None = None,
+        rate_key: str | Callable[..., str] | None = None,
+        idempotency_key: str | Callable[..., str] | None = None,
     ) -> _TaskDecorator: ...
 
     def task(
@@ -194,6 +216,8 @@ class Queue:
         dead_letter: bool = True,
         priority: Priority = "normal",
         rate_limit: RateLimit | str | None = None,
+        rate_key: str | Callable[..., str] | None = None,
+        idempotency_key: str | Callable[..., str] | None = None,
     ) -> Any:
         """Register a task.
 
@@ -218,6 +242,16 @@ class Queue:
         :class:`~blitzq.RateLimit`. A task over its limit is not executed and
         not counted as a retry; it is rescheduled for when a slot should be
         free. See docs/architecture.md#rate-limiting.
+
+        ``rate_key`` assigns calls to a named bucket (see ``Queue(rate_limits=)``)
+        instead of this task's own: a string, or a callable that receives the
+        call's arguments and returns the key, for example
+        ``rate_key=lambda order: f"stripe:{order['country']}"``. A per-call
+        ``task.options(rate_key=...)`` overrides it.
+
+        ``idempotency_key`` (a string, or a callable that receives the call's
+        arguments) names the logical job so it runs once however many times it
+        is enqueued or delivered. See docs/delivery_guarantees.md.
         """
 
         def register(f: Callable[..., Any]) -> Task[Any, Any]:
@@ -239,6 +273,8 @@ class Queue:
                 dead_letter=dead_letter,
                 priority=priority,
                 rate_limit=as_rate_limit(rate_limit),
+                rate_key=rate_key,
+                idempotency_key=idempotency_key,
             )
             t: Task[Any, Any] = Task(self, f, opts)
             self.tasks[task_name] = t
@@ -331,11 +367,13 @@ class Queue:
 
         return portal.call(run, what=what)
 
-    def _sync_publish(self, reqs: list[PublishRequest]) -> None:
-        async def go(broker: Broker) -> None:
-            await broker.publish(reqs)
+    def _sync_publish(
+        self, built: list[tuple[PublishRequest, TaskHandle[Any]]]
+    ) -> list[TaskHandle[Any]]:
+        async def go(broker: Broker) -> list[TaskHandle[Any]]:
+            return await publish_deduplicated(broker, built)
 
-        self._portal_call(go, what="enqueue_sync()")
+        return self._portal_call(go, what="enqueue_sync()")
 
     def close_sync(self) -> None:
         """Close connections used by the synchronous API and stop its thread."""

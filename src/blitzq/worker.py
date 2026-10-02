@@ -31,11 +31,13 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import contextlib
 import contextvars
 import functools
 import importlib
 import logging
 import os
+import secrets
 import signal
 import socket
 import threading
@@ -51,6 +53,7 @@ import msgspec
 from .broker.base import Completion, DeadLetterRequest, Delivery, Reschedule
 from .context import TaskContext, _current
 from .exceptions import Retry, SerializationError, TaskTimeout
+from .idempotency import storage_key
 from .logs import logger
 from .metrics import Metrics
 from .serialization import DeadLetter, Envelope
@@ -93,6 +96,10 @@ def physical_queue(base: str, priority: str) -> str:
 
 CPU_BOUND_MIN_SECONDS = 0.1
 CPU_BOUND_CPU_RATIO = 0.1
+
+# Longest a delivery waits before re-checking an idempotency key that another
+# live execution holds.
+IDEM_BUSY_RECHECK = 1.0
 
 
 class _CpuTimer:
@@ -321,6 +328,10 @@ class Worker:
         self._running: dict[str, asyncio.Task[None]] = {}
         # Strong references: asyncio keeps only weak references to tasks.
         self._inflight: set[asyncio.Task[None]] = set()
+        # owner token -> (storage key, task id), for idempotency locks held here
+        self._idem_locks: dict[str, tuple[str, str]] = {}
+        self._idem_lease = app.visibility_timeout
+        self._bg: set[asyncio.Task[None]] = set()
         self._cancel_reason: dict[str, str] = {}
         # One physical queue per priority level per subscribed queue (see
         # PRIORITY_LEVELS): leases/heartbeat/recovery are keyed by the physical
@@ -577,12 +588,20 @@ class Worker:
             return None
 
         opts = task.opts
-        if opts.rate_limit is not None:
-            wait = await self.broker.check_rate_limit(
-                env.task, opts.rate_limit.rate, opts.rate_limit.count, time.time()
-            )
+        if env.rate_key is None:
+            bucket, limit = env.task, opts.rate_limit
+        else:
+            bucket = f"k:{env.rate_key}"
+            limit = self.app.rate_limits.get(env.rate_key, opts.rate_limit)
+        if limit is not None:
+            wait = await self.broker.check_rate_limit(bucket, limit.rate, limit.count, time.time())
             if wait > 0:
-                self._defer_rate_limited(d, env, wait)
+                self._defer(d, env, wait, "rate_limited")
+                return None
+        idem_owner: str | None = None
+        if env.idem_key is not None:
+            idem_owner = await self._idem_gate(d, env, task)
+            if idem_owner is None:
                 return None
         started = time.time()
         m.inc(queue, "started")
@@ -608,6 +627,7 @@ class Worker:
             headers=env.headers or {},
             enqueued_at=env.enqueued_at,
             worker=self.id,
+            idempotency_key=env.idem_key,
         )
         timeout = env.timeout or opts.timeout
         t0 = time.perf_counter()
@@ -640,6 +660,7 @@ class Worker:
                 else:
                     result = await asyncio.shield(fut)
         except asyncio.CancelledError:
+            await self._idem_finish(env, idem_owner, success=False)
             reason = self._cancel_reason.pop(task_id, None)
             current = asyncio.current_task()
             if reason is None:
@@ -653,6 +674,7 @@ class Worker:
                 self._submit(Completion(delivery=d, ack=False, requeue=True))
             return pending
         except BaseException as exc:
+            await self._idem_finish(env, idem_owner, success=False)
             finished = time.time()
             m.observe_duration(queue, time.perf_counter() - t0)
             if isinstance(exc, TaskTimeout):
@@ -683,6 +705,9 @@ class Worker:
                 info.state = TaskState.FAILED
                 info.error = _error_info(exc)
                 record = self._ser.encode_info(info)
+        await self._idem_finish(
+            env, idem_owner, success=True, result=result, store=opts.store_result
+        )
         if record is not None or self._needs_ack:
             self._submit(
                 Completion(
@@ -851,6 +876,7 @@ class Worker:
         finished: float,
         started: float | None = None,
     ) -> None:
+        self._idem_unclaim_later(env)
         error = (
             _error_info(exc) if exc is not None else ErrorInfo(type="BlitzQError", message=reason)
         )
@@ -921,6 +947,7 @@ class Worker:
         )
 
     def _cancelled(self, d: Delivery, env: Envelope) -> None:
+        self._idem_unclaim_later(env)
         self.metrics.inc(env.queue, "cancelled")
         record = None
         if self.app.store_results or self._track:
@@ -935,15 +962,16 @@ class Worker:
         )
         logger.info("task cancelled", extra={"task_id": env.id, "task": env.task})
 
-    def _defer_rate_limited(self, d: Delivery, env: Envelope, wait: float) -> None:
-        """Put a task that is over its rate limit back on the schedule.
+    def _defer(self, d: Delivery, env: Envelope, wait: float, metric: str) -> None:
+        """Put a task that cannot start yet (rate limited, or its idempotency
+        key is held by a live execution) back on the schedule.
 
         Not a retry: ``attempt`` is unchanged and nothing is recorded as a
         failure, since the task never ran.
         """
         eta = time.time() + wait
         nxt = msgspec.structs.replace(env, enqueued_at=eta)
-        self.metrics.inc(env.queue, "rate_limited")
+        self.metrics.inc(env.queue, metric)
         self._submit(
             Completion(
                 delivery=d,
@@ -1021,10 +1049,12 @@ class Worker:
             try:
                 await broker.register_worker(self.id, msgspec.msgpack.encode(self.info()), ttl)
                 now = time.monotonic()
-                if broker.supports_recovery and now >= next_lease:
+                if now >= next_lease:
                     next_lease = now + self.heartbeat_interval
-                    await self._renew_leases()
-                    await self._recover()
+                    if broker.supports_recovery:
+                        await self._renew_leases()
+                        await self._recover()
+                    await self._renew_idem_locks()
             except Exception:
                 # Retry quickly (not after the full `tick`) so a transient Redis
                 # blip - a dropped connection, a brief timeout - doesn't leave
@@ -1037,6 +1067,111 @@ class Worker:
                 continue
             backoff = 0.1
             await asyncio.sleep(tick)
+
+    # -- idempotency ---------------------------------------------------------------
+    async def _idem_gate(self, d: Delivery, env: Envelope, task: Task[Any, Any]) -> str | None:
+        """Decide whether to run the body. Returns the lock owner token to run,
+        or ``None`` if the delivery was fully handled here (replayed or deferred)."""
+        assert env.idem_key is not None
+        key = storage_key(env.task, env.idem_key)
+        owner = f"{self.id}:{secrets.token_hex(6)}"
+        state, payload = await self.broker.idem_begin(key, owner, self._idem_lease)
+        if state == "run":
+            self._idem_locks[owner] = (key, env.id)
+            return owner
+        if state == "busy":
+            wait = min(max(float(payload), 0.05), IDEM_BUSY_RECHECK)
+            self._defer(d, env, wait, "idempotency_deferred")
+            return None
+        self._idem_replay(d, env, task, payload)
+        return None
+
+    def _idem_replay(self, d: Delivery, env: Envelope, task: Task[Any, Any], payload: Any) -> None:
+        """The effect already happened: acknowledge without running the body and
+        report the recorded result."""
+        self.metrics.inc(env.queue, "deduplicated")
+        now = time.time()
+        record = None
+        if task.opts.store_result:
+            result = None
+            if payload:
+                with contextlib.suppress(SerializationError):
+                    result = self._ser.decode_value(bytes(payload))
+            info = self._info(env, task, TaskState.SUCCEEDED, now, now, result=result)
+            record = self._ser.encode_info(info)
+        if record is not None or self._needs_ack:
+            self._submit(
+                Completion(
+                    delivery=d,
+                    ack=True,
+                    record=record,
+                    record_task_id=env.id,
+                    record_ttl=self._ttl,
+                )
+            )
+        logger.info(
+            "duplicate skipped: idempotency key already completed",
+            extra={"task_id": env.id, "task": env.task},
+        )
+
+    async def _idem_finish(
+        self,
+        env: Envelope,
+        owner: str | None,
+        *,
+        success: bool,
+        result: Any = None,
+        store: bool = False,
+    ) -> None:
+        if owner is None:
+            return
+        held = self._idem_locks.pop(owner, None)
+        if held is None:
+            return
+        key = held[0]
+        payload = b""
+        if success and store:
+            with contextlib.suppress(SerializationError):
+                payload = self._ser.encode_value(result)
+        try:
+            await self.broker.idem_finish(
+                key, owner, env.id, success, payload, self.app.idempotency_ttl
+            )
+        except Exception:
+            # The body already ran; do not turn that into a failure. The lock
+            # lapses with its lease and the key falls back to "not recorded".
+            logger.warning(
+                "could not record idempotency outcome",
+                exc_info=True,
+                extra={"task_id": env.id, "task": env.task},
+            )
+
+    def _idem_unclaim_later(self, env: Envelope) -> None:
+        """A job that ended without succeeding must not block re-enqueueing its key."""
+        if env.idem_key is None:
+            return
+        key = storage_key(env.task, env.idem_key)
+        t = asyncio.get_running_loop().create_task(self._idem_unclaim(key, env.id))
+        self._bg.add(t)
+        t.add_done_callback(self._bg.discard)
+
+    async def _idem_unclaim(self, key: str, task_id: str) -> None:
+        try:
+            await self.broker.idem_unclaim(key, task_id)
+        except Exception:
+            logger.warning("could not release idempotency key", exc_info=True)
+
+    async def _renew_idem_locks(self) -> None:
+        for owner, (key, task_id) in list(self._idem_locks.items()):
+            if task_id not in self._running:
+                # Not (or no longer) executing: let a leaked lock lapse with its
+                # lease instead of renewing it forever.
+                continue
+            if not await self.broker.idem_renew(key, owner, self._idem_lease):
+                logger.warning(
+                    "idempotency lock lost; another execution may run this key",
+                    extra={"idempotency_key": key},
+                )
 
     async def _renew_leases(self) -> None:
         for queue, leases in self._leases.items():

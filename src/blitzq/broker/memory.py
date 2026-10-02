@@ -14,7 +14,7 @@ import itertools
 import time
 from collections import deque
 from collections.abc import Sequence
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from .base import (
     Broker,
@@ -45,6 +45,9 @@ class MemoryBroker(Broker):
         self._known: set[str] = set()
         self._workers: dict[str, tuple[bytes, float]] = {}
         self._rate_buckets: dict[str, tuple[float, float]] = {}
+        # key -> [task_id, state, result, expires_at]
+        self._idem: dict[str, list[Any]] = {}
+        self._idem_locks: dict[str, tuple[str, float]] = {}
 
     def clone(self) -> MemoryBroker:
         # Sharing state is the only meaningful behaviour for an in-process broker.
@@ -255,3 +258,51 @@ class MemoryBroker(Broker):
             return 0.0
         self._rate_buckets[key] = (tokens, now)
         return (1 - tokens) / rate
+
+    # -- idempotency ---------------------------------------------------------------
+    def _idem_entry(self, key: str) -> list[Any] | None:
+        entry = self._idem.get(key)
+        if entry is not None and entry[3] <= time.time():
+            del self._idem[key]
+            return None
+        return entry
+
+    async def idem_claim(self, key: str, task_id: str, ttl: int) -> str | None:
+        entry = self._idem_entry(key)
+        if entry is not None:
+            return str(entry[0])
+        self._idem[key] = [task_id, "queued", b"", time.time() + ttl]
+        return None
+
+    async def idem_unclaim(self, key: str, task_id: str) -> None:
+        entry = self._idem_entry(key)
+        if entry is not None and entry[1] != "done" and entry[0] == task_id:
+            del self._idem[key]
+
+    async def idem_begin(self, key: str, owner: str, lease: float) -> tuple[str, object]:
+        entry = self._idem_entry(key)
+        if entry is not None and entry[1] == "done":
+            return "done", entry[2]
+        now = time.time()
+        held = self._idem_locks.get(key)
+        if held is not None and held[1] > now and held[0] != owner:
+            return "busy", held[1] - now
+        self._idem_locks[key] = (owner, now + lease)
+        return "run", None
+
+    async def idem_renew(self, key: str, owner: str, lease: float) -> bool:
+        held = self._idem_locks.get(key)
+        if held is not None and held[0] == owner and held[1] > time.time():
+            self._idem_locks[key] = (owner, time.time() + lease)
+            return True
+        return False
+
+    async def idem_finish(
+        self, key: str, owner: str, task_id: str, success: bool, result: bytes, ttl: int
+    ) -> None:
+        entry = self._idem_entry(key)
+        if success and (entry is None or entry[1] != "done"):
+            self._idem[key] = [task_id, "done", result, time.time() + ttl]
+        held = self._idem_locks.get(key)
+        if held is not None and held[0] == owner:
+            del self._idem_locks[key]

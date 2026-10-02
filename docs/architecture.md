@@ -176,8 +176,43 @@ backlog shows up as queue depth, not as blocked worker capacity.
 The check costs one Lua script call per task execution attempt (whether or
 not it is over the limit) - negligible next to the cost of actually running
 the task, but worth knowing if you are chasing a raw round-trip count on an
-otherwise trivial task. Rate limits are per task name; there is no per-queue
-or global rate limit.
+otherwise trivial task.
+
+### Named buckets (`rate_key`)
+
+By default the bucket is the task name. To give independent callers their own
+budgets, for example one per payment gateway and country, tag the call with a
+`rate_key`:
+
+```python
+queue = Queue(rate_limits={"stripe:IN": "10/s", "stripe:US": "50/s"})
+
+@queue.task
+async def charge(order): ...
+
+@queue.task
+async def refund(order): ...
+
+await charge.options(rate_key="stripe:IN").enqueue(order)   # per call
+# or derive it from the arguments:
+@queue.task(rate_key=lambda order: f"stripe:{order['country']}")
+async def bill(order): ...
+```
+
+- The bucket is `{ns}:rl:k:{rate_key}`. Every task using the same key shares
+  it (`charge` and `refund` above draw from one `stripe:IN` budget), across all
+  workers.
+- The budget comes from `Queue(rate_limits=...)` for that key. If the key is not
+  listed, the task's own `rate_limit` applies **per key**, so each distinct key
+  gets its own bucket at that rate. With neither, the call is not limited.
+- A throttled key is rescheduled like any rate-limited task, so a backlog on
+  `stripe:IN` never occupies worker capacity or delays `stripe:US`.
+- The key travels in the message and survives retries. Workers must be started
+  with the same `rate_limits` as the producers; budgets are read worker-side.
+- Keys create one Redis key each. Use a bounded set (countries, gateways), not
+  unbounded values like user ids.
+
+There is no per-queue or global rate limit.
 
 ## Periodic tasks
 

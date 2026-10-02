@@ -42,6 +42,8 @@ class Envelope(msgspec.Struct, array_like=True):
     correlation_id: str | None = None
     headers: dict[str, str] | None = None
     timeout: float | None = None
+    rate_key: str | None = None
+    idem_key: str | None = None
 
 
 class DeadLetter(msgspec.Struct, omit_defaults=True):
@@ -117,6 +119,19 @@ class Serializer:
         except (msgspec.DecodeError, msgspec.ValidationError) as exc:
             raise SerializationError(f"malformed task message: {exc}") from exc
         return env
+
+    # -- bare values (idempotency results) -----------------------------------------
+    def encode_value(self, value: Any) -> bytes:
+        try:
+            return self._encoder.encode(value)  # type: ignore[no-any-return]
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise SerializationError(f"cannot serialize result: {exc}") from exc
+
+    def decode_value(self, data: bytes) -> Any:
+        try:
+            return self._any_decoder.decode(data)
+        except msgspec.DecodeError as exc:
+            raise SerializationError(f"malformed stored result: {exc}") from exc
 
     # -- records -------------------------------------------------------------------
     def encode_info(self, info: TaskInfo) -> bytes:

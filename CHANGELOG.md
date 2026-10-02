@@ -3,6 +3,37 @@
 All notable changes to this project are documented here. The project follows
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **Idempotency keys.** `@queue.task(idempotency_key=...)` or
+  `task.options(idempotency_key=...)` names a logical job so it takes effect
+  once. A duplicate enqueue is dropped and returns a handle to the first task;
+  at execution, a leased lock stops two workers running the same key, a
+  finished job's recorded result is replayed to duplicates instead of
+  re-running the body, and a crashed owner's lock expires on its own.
+  `current_task().idempotency_key` exposes the key so it can be forwarded to
+  payment providers and other APIs that accept their own. New
+  `Queue(idempotency_ttl=...)` (default 24 h). Works in fast and reliable
+  mode and with the memory broker. See
+  [docs/delivery_guarantees.md](docs/delivery_guarantees.md#idempotency-keys).
+- **Named rate-limit buckets.** `task.options(rate_key="stripe:IN")` (or
+  `@queue.task(rate_key=lambda order: ...)`) draws from its own bucket
+  instead of the task's, so independent budgets (per gateway, country or
+  tenant) cannot starve each other. Budgets are set with
+  `Queue(rate_limits={"stripe:IN": "10/s"})`, falling back to the task's own
+  `rate_limit` per key; any task using a key shares its bucket. See
+  [docs/architecture.md](docs/architecture.md#named-buckets-rate_key).
+
+### Changed
+
+- The Redis connection pool now retries transient connection errors with
+  exponential backoff instead of raising on the first dropped connection.
+- Licence: new work is released under the PolyForm Noncommercial License
+  1.0.0 (commercial use needs a separate licence). Versions 1.0.0 to 1.1.0
+  remain available under the MIT licence they were released with.
+
 ## [1.1.0] - 2026-09-30
 
 ### Added

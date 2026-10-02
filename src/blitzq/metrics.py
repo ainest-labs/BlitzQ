@@ -31,6 +31,8 @@ EVENTS = (
     "requeued",
     "malformed",
     "rate_limited",
+    "deduplicated",
+    "idempotency_deferred",
 )
 
 

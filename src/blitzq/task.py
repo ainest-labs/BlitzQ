@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Generic, Literal, ParamSpec, TypeVar
 from .broker.base import PublishRequest
 from .context import current_task
 from .exceptions import ConfigurationError
+from .idempotency import publish_deduplicated, storage_key, validate_key
 from .ratelimit import RateLimit
 from .results import TaskHandle
 from .retries import RetryPolicy
@@ -41,6 +42,8 @@ class TaskOptions:
     dead_letter: bool
     priority: Priority
     rate_limit: RateLimit | None
+    rate_key: str | Callable[..., str] | None = None
+    idempotency_key: str | Callable[..., str] | None = None
 
 
 def new_task_id() -> str:
@@ -71,6 +74,8 @@ class CallOptions:
     headers: Mapping[str, str] | None = None
     timeout: float | None = None
     priority: Priority | None = None
+    rate_key: str | None = None
+    idempotency_key: str | None = None
 
 
 class Task(Generic[P, R]):
@@ -122,8 +127,22 @@ class Task(Generic[P, R]):
         headers: Mapping[str, str] | None = None,
         timeout: float | None = None,
         priority: Priority | None = None,
+        rate_key: str | None = None,
+        idempotency_key: str | None = None,
     ) -> BoundTask[P, R]:
         """Return a view of this task with per-call options applied.
+
+        ``rate_key`` puts this call in a named rate-limit bucket instead of
+        the task's own, so independent budgets (for example one per payment
+        gateway and country) cannot starve each other. Any task using the same
+        key shares the bucket. The budget comes from ``Queue(rate_limits=...)``
+        for that key, falling back to this task's ``rate_limit``.
+
+        ``idempotency_key`` names this logical job. Enqueueing the same key for
+        this task again (within ``Queue(idempotency_ttl=...)``) publishes
+        nothing and returns a handle to the first task, and the worker runs the
+        body at most once per key: a duplicate waits for a running execution or
+        returns the recorded result. See docs/delivery_guarantees.md.
 
         ``delay`` (seconds or timedelta) and ``eta`` (aware datetime or epoch
         seconds) schedule the task for later. ``task_id`` sets an explicit id;
@@ -143,6 +162,8 @@ class Task(Generic[P, R]):
                 headers=headers,
                 timeout=timeout,
                 priority=priority,
+                rate_key=rate_key,
+                idempotency_key=idempotency_key,
             ),
         )
 
@@ -159,6 +180,8 @@ class Task(Generic[P, R]):
             headers = None
             timeout = None
             priority = self.opts.priority
+            call_rate_key = None
+            call_idem_key = None
         else:
             queue = call.queue or self.queue
             task_id = call.task_id or new_task_id()
@@ -167,6 +190,18 @@ class Task(Generic[P, R]):
             headers = dict(call.headers) if call.headers else None
             timeout = call.timeout
             priority = call.priority or self.opts.priority
+            call_rate_key = call.rate_key
+            call_idem_key = call.idempotency_key
+        idem_key = call_idem_key
+        if idem_key is None:
+            idem_conf = self.opts.idempotency_key
+            idem_key = idem_conf(*args, **kwargs) if callable(idem_conf) else idem_conf
+        if idem_key is not None:
+            validate_key(idem_key, self.name)
+        rate_key = call_rate_key
+        if rate_key is None:
+            configured = self.opts.rate_key
+            rate_key = configured(*args, **kwargs) if callable(configured) else configured
         if priority != "normal":
             # Priority levels are physically separate broker queues, checked
             # in order by the worker but sharing the base queue's concurrency
@@ -191,6 +226,8 @@ class Task(Generic[P, R]):
             correlation_id=correlation_id,
             headers=headers,
             timeout=timeout,
+            rate_key=rate_key,
+            idem_key=idem_key,
         )
         data = app.serializer.encode_envelope(env)
         record = None
@@ -210,20 +247,27 @@ class Task(Generic[P, R]):
                     correlation_id=correlation_id,
                 )
             )
-        req = PublishRequest(queue, task_id, data, eta, record, app.result_ttl)
+        req = PublishRequest(
+            queue,
+            task_id,
+            data,
+            eta,
+            record,
+            app.result_ttl,
+            storage_key(self.name, idem_key) if idem_key is not None else None,
+            app.idempotency_ttl,
+        )
         return req, TaskHandle(task_id, app, queue)
 
     async def enqueue(self, *args: P.args, **kwargs: P.kwargs) -> TaskHandle[R]:
         """Publish the task. Non-blocking for the event loop; returns once Redis accepted it."""
-        req, handle = self._build(args, kwargs, None)
-        await self.app.broker.publish((req,))
-        return handle
+        built = [self._build(args, kwargs, None)]
+        return (await publish_deduplicated(self.app.broker, built))[0]
 
     def enqueue_sync(self, *args: P.args, **kwargs: P.kwargs) -> TaskHandle[R]:
         """Blocking variant of :meth:`enqueue` for synchronous code."""
-        req, handle = self._build(args, kwargs, None)
-        self.app._sync_publish([req])
-        return handle
+        built = [self._build(args, kwargs, None)]
+        return self.app._sync_publish(built)[0]
 
     async def enqueue_many(self, items: Iterable[tuple[Any, ...]]) -> list[TaskHandle[R]]:
         """Publish many calls in one pipelined round-trip.
@@ -231,15 +275,11 @@ class Task(Generic[P, R]):
         Each item is a tuple of positional arguments.
         """
         built = [self._build(tuple(args), {}, None) for args in items]
-        if built:
-            await self.app.broker.publish([r for r, _ in built])
-        return [h for _, h in built]
+        return await publish_deduplicated(self.app.broker, built) if built else []
 
     def enqueue_many_sync(self, items: Iterable[tuple[Any, ...]]) -> list[TaskHandle[R]]:
         built = [self._build(tuple(args), {}, None) for args in items]
-        if built:
-            self.app._sync_publish([r for r, _ in built])
-        return [h for _, h in built]
+        return self.app._sync_publish(built) if built else []
 
 
 class BoundTask(Generic[P, R]):
@@ -252,14 +292,12 @@ class BoundTask(Generic[P, R]):
         self.call = call
 
     async def enqueue(self, *args: P.args, **kwargs: P.kwargs) -> TaskHandle[R]:
-        req, handle = self.task._build(args, kwargs, self.call)
-        await self.task.app.broker.publish((req,))
-        return handle
+        built = [self.task._build(args, kwargs, self.call)]
+        return (await publish_deduplicated(self.task.app.broker, built))[0]
 
     def enqueue_sync(self, *args: P.args, **kwargs: P.kwargs) -> TaskHandle[R]:
-        req, handle = self.task._build(args, kwargs, self.call)
-        self.task.app._sync_publish([req])
-        return handle
+        built = [self.task._build(args, kwargs, self.call)]
+        return self.task.app._sync_publish(built)[0]
 
     def _build_many(self, items: Iterable[tuple[Any, ...]]) -> list[tuple[PublishRequest, Any]]:
         if self.call.task_id is not None:
@@ -269,12 +307,8 @@ class BoundTask(Generic[P, R]):
     async def enqueue_many(self, items: Iterable[tuple[Any, ...]]) -> list[TaskHandle[R]]:
         """Publish many calls with these options in one pipelined round-trip."""
         built = self._build_many(items)
-        if built:
-            await self.task.app.broker.publish([r for r, _ in built])
-        return [h for _, h in built]
+        return await publish_deduplicated(self.task.app.broker, built) if built else []
 
     def enqueue_many_sync(self, items: Iterable[tuple[Any, ...]]) -> list[TaskHandle[R]]:
         built = self._build_many(items)
-        if built:
-            self.task.app._sync_publish([r for r, _ in built])
-        return [h for _, h in built]
+        return self.task.app._sync_publish(built) if built else []

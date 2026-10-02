@@ -23,6 +23,9 @@ class TaskContext:
     headers: dict[str, str] = field(default_factory=dict)
     enqueued_at: float = 0.0
     worker: str | None = None
+    #: The task's idempotency key, if it has one. Pass it to external systems
+    #: (payment providers, email APIs) that accept their own idempotency key.
+    idempotency_key: str | None = None
 
     @property
     def retries(self) -> int:
